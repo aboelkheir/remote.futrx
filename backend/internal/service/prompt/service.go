@@ -13,7 +13,6 @@ import (
 	servicechat "github.com/futrx-com/remote.futrx.com/internal/service/chat"
 	serviceproject "github.com/futrx-com/remote.futrx.com/internal/service/project"
 	"github.com/futrx-com/remote.futrx.com/internal/service/runhub"
-	serviceusage "github.com/futrx-com/remote.futrx.com/internal/service/usage"
 )
 
 type ChatEvent = servicechat.Event
@@ -81,20 +80,6 @@ type ScheduleToolIssuer interface {
 	IssueScheduleTool(context.Context, ScheduleToolRequest) (ScheduleToolAccess, error)
 }
 
-// UsageRecorder receives one entry per completed agent run. It is the only
-// thing the prompt service knows about token accounting; pricing, storage and
-// aggregation all live in the usage service.
-type UsageRecorder interface {
-	RecordRun(ctx context.Context, event serviceusage.RunEvent)
-}
-
-// QuotaRecorder files the subscription windows the agent CLIs volunteer. It is
-// optional: without one the readings are dropped and the dashboard has no plan
-// card, which is the behaviour before this existed.
-type QuotaRecorder interface {
-	Record(ctx context.Context, provider agent.ProviderID, quota agent.Quota)
-}
-
 type Option func(*Service)
 
 // StartGate blocks new agent runs while an external host job owns the
@@ -113,19 +98,6 @@ func WithStartGate(gate StartGate) Option {
 func WithScheduleToolIssuer(issuer ScheduleToolIssuer) Option {
 	return func(service *Service) {
 		service.scheduleTools = issuer
-	}
-}
-
-func WithUsageRecorder(recorder UsageRecorder) Option {
-	return func(service *Service) {
-		service.usage = recorder
-	}
-}
-
-// WithQuotaRecorder installs it.
-func WithQuotaRecorder(recorder QuotaRecorder) Option {
-	return func(service *Service) {
-		service.quota = recorder
 	}
 }
 
