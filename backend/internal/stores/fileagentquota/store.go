@@ -11,7 +11,6 @@ package fileagentquota
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,13 +51,7 @@ func (s *Store) Load(ctx context.Context) (map[string]agentquota.AgentQuota, err
 	defer s.mu.Unlock()
 
 	raw, err := os.ReadFile(s.path())
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return map[string]agentquota.AgentQuota{}, nil
-		}
-		return map[string]agentquota.AgentQuota{}, nil
-	}
-	if len(raw) == 0 {
+	if err != nil || len(raw) == 0 {
 		return map[string]agentquota.AgentQuota{}, nil
 	}
 	readings := map[string]agentquota.AgentQuota{}

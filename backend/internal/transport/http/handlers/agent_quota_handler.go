@@ -13,10 +13,14 @@ type AgentQuotaService interface {
 	View() []agentquota.AgentQuota
 }
 
-// AgentQuotaHandler serves the home screen's plan card.
+// AgentQuotaHandler serves the settings plan-quota card.
 type AgentQuotaHandler struct {
 	quota AgentQuotaService
 	auth  *serviceauth.Service
+}
+
+type agentQuotaResponse struct {
+	Agents []agentquota.AgentQuota `json:"agents"`
 }
 
 func NewAgentQuotaHandler(quota AgentQuotaService, auth *serviceauth.Service) *AgentQuotaHandler {
@@ -38,7 +42,7 @@ func (h *AgentQuotaHandler) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h == nil || h.quota == nil {
-		httptransport.SendJSON(w, http.StatusOK, map[string]any{"agents": []agentquota.AgentQuota{}})
+		sendAgentQuota(w, nil)
 		return
 	}
 	email, _, err := httptransport.NewPrincipalResolver(h.auth).EmailAndAdmin(r.Context(), r)
@@ -46,9 +50,12 @@ func (h *AgentQuotaHandler) handle(w http.ResponseWriter, r *http.Request) {
 		httptransport.SendErr(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	agents := h.quota.View()
+	sendAgentQuota(w, h.quota.View())
+}
+
+func sendAgentQuota(w http.ResponseWriter, agents []agentquota.AgentQuota) {
 	if agents == nil {
 		agents = []agentquota.AgentQuota{}
 	}
-	httptransport.SendJSON(w, http.StatusOK, map[string]any{"agents": agents})
+	httptransport.SendJSON(w, http.StatusOK, agentQuotaResponse{Agents: agents})
 }
