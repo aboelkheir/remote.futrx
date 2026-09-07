@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { AgentBrowserStatus } from "../../../models/project";
+import { ReconnectingJsonWebSocket } from "../../../transport/reconnectingJsonSocket";
 import { syncBrowserAddress } from "./browserAddressState";
 
 interface BrowserTab {
@@ -15,6 +16,11 @@ interface BrowserFrameMessage {
   width: number;
   height: number;
 }
+
+type BrowserViewMessage =
+  | BrowserFrameMessage
+  | { type: "tabs"; tabs: BrowserTab[] }
+  | { type: "error"; message: string };
 
 function socketURL(path: string): string {
   const target = new URL(path, window.location.href);
@@ -55,7 +61,7 @@ export function BrowserGuiView({
   resizing: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const socketRef = useRef<WebSocket | null>(null);
+  const socketRef = useRef<ReconnectingJsonWebSocket<BrowserViewMessage> | null>(null);
   const addressInputRef = useRef<HTMLInputElement>(null);
   const frameSizeRef = useRef({ width: 1280, height: 720 });
   const frameSequenceRef = useRef(0);
@@ -69,68 +75,61 @@ export function BrowserGuiView({
   const sharedView = url.startsWith("/api/projects/") && url.endsWith("/agent-browser/view");
 
   function send(message: Record<string, unknown>) {
-    const socket = socketRef.current;
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+    socketRef.current?.send(message);
   }
 
   useEffect(() => {
     if (status !== "ready" || !url || !sharedView) return;
     let disposed = false;
-    const socket = new WebSocket(socketURL(url));
+    const socket = new ReconnectingJsonWebSocket<BrowserViewMessage>({
+      resolveUrl: () => socketURL(url),
+      onOpen: () => {
+        if (disposed) return;
+        setConnected(true);
+        setStreamError(null);
+      },
+      onClose: () => {
+        if (disposed) return;
+        setConnected(false);
+        setStreamError("The browser view disconnected. Reconnecting…");
+      },
+      onMessage: (message) => {
+        if (disposed) return;
+        if (message.type === "tabs") {
+          setTabs(message.tabs);
+          setAddress((current) => syncBrowserAddress(
+            current,
+            message.tabs,
+            document.activeElement === addressInputRef.current,
+          ));
+          return;
+        }
+        if (message.type === "error") {
+          setStreamError(message.message);
+          return;
+        }
+        if (message.type !== "frame") return;
+        const sequence = ++frameSequenceRef.current;
+        const image = new Image();
+        image.onload = () => {
+          if (disposed || sequence !== frameSequenceRef.current) return;
+          const canvas = canvasRef.current;
+          const context = canvas?.getContext("2d");
+          if (!canvas || !context) return;
+          const width = Math.max(1, Number(message.width) || image.naturalWidth || 1280);
+          const height = Math.max(1, Number(message.height) || image.naturalHeight || 720);
+          frameSizeRef.current = { width, height };
+          if (canvas.width !== width) canvas.width = width;
+          if (canvas.height !== height) canvas.height = height;
+          context.drawImage(image, 0, 0, width, height);
+        };
+        image.src = `data:image/jpeg;base64,${message.data}`;
+      },
+    });
     socketRef.current = socket;
     setConnected(false);
     setStreamError(null);
-
-    socket.onopen = () => {
-      if (!disposed) setConnected(true);
-    };
-    socket.onclose = () => {
-      if (!disposed) {
-        setConnected(false);
-        setStreamError("The browser view disconnected. Use refresh to reconnect.");
-      }
-    };
-    socket.onerror = () => {
-      if (!disposed) setStreamError("Couldn't connect to the browser view.");
-    };
-    socket.onmessage = (event) => {
-      if (disposed || typeof event.data !== "string") return;
-      let message: BrowserFrameMessage | { type: "tabs"; tabs: BrowserTab[] } | { type: "error"; message: string };
-      try {
-        message = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      if (message.type === "tabs") {
-        setTabs(message.tabs);
-        setAddress((current) => syncBrowserAddress(
-          current,
-          message.tabs,
-          document.activeElement === addressInputRef.current,
-        ));
-        return;
-      }
-      if (message.type === "error") {
-        setStreamError(message.message);
-        return;
-      }
-      if (message.type !== "frame") return;
-      const sequence = ++frameSequenceRef.current;
-      const image = new Image();
-      image.onload = () => {
-        if (disposed || sequence !== frameSequenceRef.current) return;
-        const canvas = canvasRef.current;
-        const context = canvas?.getContext("2d");
-        if (!canvas || !context) return;
-        const width = Math.max(1, Number(message.width) || image.naturalWidth || 1280);
-        const height = Math.max(1, Number(message.height) || image.naturalHeight || 720);
-        frameSizeRef.current = { width, height };
-        if (canvas.width !== width) canvas.width = width;
-        if (canvas.height !== height) canvas.height = height;
-        context.drawImage(image, 0, 0, width, height);
-      };
-      image.src = `data:image/jpeg;base64,${message.data}`;
-    };
+    socket.start();
 
     return () => {
       disposed = true;
@@ -139,7 +138,7 @@ export function BrowserGuiView({
       if (pointerAnimationRef.current) cancelAnimationFrame(pointerAnimationRef.current);
       pointerAnimationRef.current = 0;
       if (socketRef.current === socket) socketRef.current = null;
-      socket.close();
+      socket.stop();
     };
   }, [status, url, reloadKey, sharedView]);
 

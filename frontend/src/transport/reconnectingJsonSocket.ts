@@ -1,6 +1,6 @@
-import { WebSocketConnection } from "./webSocketConnection";
+import { WebSocketConnection } from "./webSocketConnection.ts";
 import type { ReconnectingJsonWebSocketOptions } from "../types/transport";
-import { JSON_SOCKET_RECONNECT_POLICY } from "../config/transport";
+import { JSON_SOCKET_RECONNECT_POLICY } from "../config/transport.ts";
 
 export class ReconnectingJsonWebSocket<TMessage> {
   readonly #configuration: ReconnectingJsonWebSocketOptions<TMessage>;
