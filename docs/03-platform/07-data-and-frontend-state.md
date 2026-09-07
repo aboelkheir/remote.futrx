@@ -147,6 +147,34 @@ reconstructs deadlines and abandons stale claims after a backend restart.
 
 Rewind rewrites `events.jsonl` atomically with only events before the selected timestamp and best-effort rebuilds that chat's derived index rows. Chat deletion removes the chat directory and corresponding index rows.
 
+## Agent quota snapshots
+
+Subscription windows follow a separate path from the usage ledger. Provider
+adapters own their quota wire shapes and normalization in `claude/quota.go`
+and `codex/quota.go`. The prompt service records normalized observations
+through its `QuotaRecorder` contract; quota events are not chat transcript
+events. `service/agent/quota` owns the latest session and weekly readings per
+provider and returns providers in stable order.
+
+`stores/fileagentquota` persists snapshots to `DATA_DIR/agent-quota.json` using
+a mode-`0600` temporary file and rename. Writes are synchronous and best effort;
+missing or unreadable snapshots do not prevent startup. Without a repository,
+the quota service retains observations for the lifetime of the process.
+
+`GET /api/agent-quota` exposes the snapshots. In the frontend, `agentQuotaApi`
+owns the request and `models/agentQuota.ts` describes its data. The Usage
+section's `usePlanQuota` hook owns one request per mount and ignores results
+after unmount. Its adjacent `planQuotaState` projection builds the display
+contracts in `models/planQuota.ts`, using labels, tones, and thresholds from
+`config/planQuota.ts`. Missing percentages stay absent, so a status-only
+window never acquires a zero-percent bar. Snapshot ages and reset countdowns
+are recomputed on render; this section has no polling or clock timer.
+
+The Codex quota parser currently handles the legacy JSONL stream. Actual
+Codex runs use `codexharness`'s app-server notification parser, which does not
+emit quota observations. Legacy parser tests therefore do not demonstrate
+quota updates from live Codex runs.
+
 ## Project persistence
 
 Project metadata and workspaces are separate:
