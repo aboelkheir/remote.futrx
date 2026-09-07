@@ -1,20 +1,7 @@
-import type { PlanQuotaWindow, QuotaTone } from "../../../models/agentQuota";
+import { PLAN_QUOTA_TONES } from "../../../config/planQuota";
+import type { PlanQuotaWindow } from "../../../models/planQuota";
 import { usePlanQuota } from "../../../state/hooks/usage/usePlanQuota";
 import { Key } from "../../primitives/icons";
-
-const TONE_TEXT: Record<QuotaTone, string> = {
-  ok: "text-accent-blue",
-  warn: "text-accent-orange",
-  spent: "text-accent-red",
-  unknown: "text-ink-400",
-};
-
-const TONE_WORD: Record<QuotaTone, string> = {
-  ok: "fine",
-  warn: "getting low",
-  spent: "out",
-  unknown: "not reported",
-};
 
 /**
  * Plan limits: how much of the Claude and Codex subscriptions is left.
@@ -73,20 +60,21 @@ export function PlanQuotaSection() {
  * the CLI never made.
  */
 function WindowRow({ window }: { window: PlanQuotaWindow }) {
+  const tone = PLAN_QUOTA_TONES[window.tone];
   return (
     <div class="mt-1.5">
       <div class="flex items-baseline justify-between gap-2">
         <span class="text-[11.5px] text-ink-300">{window.label}</span>
-        <span class={`text-[11.5px] tabular-nums ${TONE_TEXT[window.tone]}`}>
+        <span class={`text-[11.5px] tabular-nums ${tone.textClass}`}>
           {window.percent == null
-            ? TONE_WORD[window.tone]
+            ? tone.label
             : `${window.percent}% used`}
         </span>
       </div>
       {window.barPercent != null && (
         <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-tint">
           <div
-            class={`h-full rounded-full bg-current ${TONE_TEXT[window.tone]}`}
+            class={`h-full rounded-full bg-current ${tone.textClass}`}
             style={{ width: `${window.barPercent}%` }}
           />
         </div>

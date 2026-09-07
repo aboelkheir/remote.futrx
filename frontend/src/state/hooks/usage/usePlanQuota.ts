@@ -1,6 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { agentQuotaApi } from "../../../api/agents/agentQuotaApi";
-import type { AgentQuota, PlanQuotaRow } from "../../../models/agentQuota";
+import type { AgentQuota } from "../../../models/agentQuota";
+import type { PlanQuotaRow } from "../../../models/planQuota";
 import { projectPlanQuotaRows } from "./planQuotaState";
 
 export interface PlanQuotaState {

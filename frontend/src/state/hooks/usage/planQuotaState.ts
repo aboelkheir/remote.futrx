@@ -3,20 +3,18 @@ import {
   PLAN_QUOTA_MIN_VISIBLE_BAR_PERCENT,
   PLAN_QUOTA_SPENT_PERCENT,
   PLAN_QUOTA_WARNING_PERCENT,
-} from "../../../config/usage.ts";
+  PLAN_QUOTA_WINDOW_LABELS,
+} from "../../../config/planQuota.ts";
 import type {
   AgentQuota,
-  PlanQuotaRow,
-  PlanQuotaWindow,
-  QuotaTone,
   QuotaWindow,
   QuotaWindowKind,
 } from "../../../models/agentQuota.ts";
-
-const WINDOW_LABELS: Record<QuotaWindowKind, string> = {
-  session: "5-hour window",
-  weekly: "This week",
-};
+import type {
+  PlanQuotaRow,
+  PlanQuotaWindow,
+  QuotaTone,
+} from "../../../models/planQuota.ts";
 
 /** Projects API quota snapshots into the exact rows rendered by the Usage tab. */
 export function projectPlanQuotaRows(
@@ -50,7 +48,7 @@ function projectWindow(
   const percent = typeof window.usedPercent === "number" ? Math.round(window.usedPercent) : null;
   return {
     kind,
-    label: WINDOW_LABELS[kind],
+    label: PLAN_QUOTA_WINDOW_LABELS[kind],
     tone: quotaTone(window),
     percent,
     barPercent:
