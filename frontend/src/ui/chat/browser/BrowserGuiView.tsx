@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { AgentBrowserStatus } from "../../../models/project";
+import { syncBrowserAddress } from "./browserAddressState";
 
 interface BrowserTab {
   id: string;
@@ -55,6 +56,7 @@ export function BrowserGuiView({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const addressInputRef = useRef<HTMLInputElement>(null);
   const frameSizeRef = useRef({ width: 1280, height: 720 });
   const frameSequenceRef = useRef(0);
   const pendingPointerRef = useRef<Record<string, unknown> | null>(null);
@@ -101,8 +103,11 @@ export function BrowserGuiView({
       }
       if (message.type === "tabs") {
         setTabs(message.tabs);
-        const active = message.tabs.find((tab) => tab.active);
-        if (active) setAddress(active.url === "about:blank" ? "" : active.url);
+        setAddress((current) => syncBrowserAddress(
+          current,
+          message.tabs,
+          document.activeElement === addressInputRef.current,
+        ));
         return;
       }
       if (message.type === "error") {
@@ -233,6 +238,7 @@ export function BrowserGuiView({
           <button type="button" class="h-7 w-7 rounded hover:bg-white/10" onClick={() => send({ type: "forward" })} title="Forward">→</button>
           <button type="button" class="h-7 w-7 rounded hover:bg-white/10" onClick={() => send({ type: "reload" })} title="Reload">↻</button>
           <input
+            ref={addressInputRef}
             value={address}
             onInput={(event) => setAddress(event.currentTarget.value)}
             class="h-7 min-w-0 flex-1 rounded-full bg-[#202124] px-3 text-[12px] text-white outline-none focus:ring-1 focus:ring-accent"

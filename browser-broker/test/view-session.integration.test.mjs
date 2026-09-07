@@ -74,6 +74,10 @@ test('live view streams frames and relays human input to the project page', {
     client.send(JSON.stringify({ type: 'key', eventType: 'keyUp', key: 'a', code: 'KeyA' }));
     await eventually(async () => await page.locator('input').inputValue() === 'separate-alpha-inputa');
 
+    client.send(JSON.stringify({ type: 'key', eventType: 'keyDown', key: '.', code: 'Period', text: '.' }));
+    client.send(JSON.stringify({ type: 'key', eventType: 'keyUp', key: '.', code: 'Period' }));
+    await eventually(async () => await page.locator('input').inputValue() === 'separate-alpha-inputa.');
+
     client.send(JSON.stringify({ type: 'key', eventType: 'keyDown', key: 'Enter', code: 'Enter' }));
     client.send(JSON.stringify({ type: 'key', eventType: 'keyUp', key: 'Enter', code: 'Enter' }));
     await eventually(() => page.evaluate(() => window.entered));
