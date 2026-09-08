@@ -62,6 +62,7 @@ func main() {
 		agentModules.Profiles(),
 		config.ContainerStackOptions{
 			AgentInstructions: provisioning.InstructionsTemplate(publicHostname),
+			PublicHostname:    publicHostname,
 		},
 	)
 

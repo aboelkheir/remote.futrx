@@ -54,6 +54,7 @@ type ContainerStack struct {
 type ContainerStackOptions struct {
 	AgentInstructions  []byte
 	ImageBuildProgress serviceimage.ProgressReporter
+	PublicHostname     string
 }
 
 // ProjectDependencies exposes only the capabilities consumed by project
@@ -104,7 +105,7 @@ func NewContainerStack(
 		Runtime:     browserAdapter,
 		Tooling:     browserAdapter,
 	}, containerbrowser.VNCPort)
-	codeServer := containercodeserver.NewProvisioner(runner)
+	codeServer := containercodeserver.NewProvisioner(runner, options.PublicHostname)
 	scheduleTools := containerscheduletools.NewAdapter(runner, publisher)
 	workspace := containerworkspace.NewProvisioner(
 		runner,
@@ -127,7 +128,11 @@ func NewContainerStack(
 		codeServer,
 		scheduleTools,
 	)
-	resources := containerresources.NewManager(runner)
+	viteAllowedHost := ""
+	if options.PublicHostname != "" {
+		viteAllowedHost = ".dev." + options.PublicHostname
+	}
+	resources := containerresources.NewManager(runner, viteAllowedHost)
 	lifecycle := servicelifecycle.NewService(
 		containerlifecycle.NewClient(runner),
 		serviceimage.Alias,
