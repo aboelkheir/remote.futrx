@@ -101,7 +101,7 @@ func TestEnsureRepairsDriftedKey(t *testing.T) {
 	}
 
 	got := runner.called("profile set")
-	if len(got) != 1 || !strings.Contains(got[0], "limits.memory 4GiB") {
+	if len(got) != 1 || !strings.Contains(got[0], "limits.memory 8GiB") {
 		t.Fatalf("expected exactly the drifted key to be reset, got %v", got)
 	}
 }
@@ -124,7 +124,22 @@ func TestSetLimitsAppliesContainerOverrides(t *testing.T) {
 }
 
 func TestSetLimitsClearsContainerOverrides(t *testing.T) {
-	runner := &fakeRunner{responses: map[string]fakeResponse{}}
+	// Regression: the Resource Limits form used to fail when CPU/memory were
+	// already inherited and the root disk device came from a profile.
+	runner := &fakeRunner{responses: map[string]fakeResponse{
+		"config unset c1 limits.cpu": {
+			out: "Error: Config key limits.cpu is not currently set",
+			err: errors.New("exit status 1"),
+		},
+		"config unset c1 limits.memory": {
+			out: "Error: Config key limits.memory not found",
+			err: errors.New("exit status 1"),
+		},
+		"config device unset c1 root size": {
+			out: "Error: Device from profile cannot be modified for individual instance; override device",
+			err: errors.New("exit status 1"),
+		},
+	}}
 
 	if err := NewManager(runner).SetLimits(context.Background(), "c1", "", "", ""); err != nil {
 		t.Fatalf("SetLimits: %v", err)

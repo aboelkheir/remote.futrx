@@ -34,10 +34,10 @@ const (
 var profileConfig = [...][2]string{
 	// Hard memory ceiling: the container's own OOM killer fires inside the
 	// cgroup; the host never feels it.
-	{"limits.memory", "4GiB"},
+	{"limits.memory", "8GiB"},
 	// CPU cap below the host's core count so the host control plane (LXD,
 	// sshd, backend) always has headroom even with a pegged workspace.
-	{"limits.cpu", "6"},
+	{"limits.cpu", "2"},
 	// Fork-bomb guard; the kernel PID table is shared with the host.
 	{"limits.processes", "2000"},
 	// Chrome's own sandbox (nested user namespaces) for the Agent Browser.
@@ -87,14 +87,14 @@ func (m *Manager) SetLimits(ctx context.Context, containerName, cpu, memory, dis
 			args = []string{"config", "unset", containerName, limit.key}
 		}
 		out, err := command.RunWithTimeout(ctx, m.runner, queryTimeout, args...)
-		if err != nil {
+		if err != nil && !(limit.value == "" && missingConfigOutput(out+" "+err.Error())) {
 			return fmt.Errorf("%s: %w; output: %s", strings.Join(args, " "), err, out)
 		}
 	}
 
 	if disk == "" {
 		out, err := command.RunWithTimeout(ctx, m.runner, queryTimeout, "config", "device", "unset", containerName, "root", "size")
-		if err != nil && !missingDeviceOutput(out+" "+err.Error()) {
+		if err != nil && !missingDeviceOutput(out+" "+err.Error()) && !inheritedDeviceOutput(out+" "+err.Error()) {
 			return fmt.Errorf("config device unset %s root size: %w; output: %s", containerName, err, out)
 		}
 		return nil
@@ -114,12 +114,25 @@ func (m *Manager) SetLimits(ctx context.Context, containerName, cpu, memory, dis
 	return nil
 }
 
+func missingConfigOutput(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "not found") ||
+		strings.Contains(lower, "not currently set") ||
+		strings.Contains(lower, "is not set")
+}
+
 func missingDeviceOutput(output string) bool {
 	lower := strings.ToLower(output)
 	return strings.Contains(lower, "not found") ||
 		strings.Contains(lower, "doesn't exist") ||
 		strings.Contains(lower, "does not exist") ||
 		strings.Contains(lower, "not defined")
+}
+
+func inheritedDeviceOutput(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "cannot be modified for individual instance") ||
+		strings.Contains(lower, "override device")
 }
 
 func (m *Manager) ensureProfile(ctx context.Context) error {
