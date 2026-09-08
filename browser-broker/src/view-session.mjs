@@ -26,6 +26,8 @@ export class ViewSession {
     this.pendingMessages = 0;
     this.closed = false;
     this.lastFrameAt = 0;
+    this.frameTimer = null;
+    this.pendingFrame = null;
   }
 
   async start() {
@@ -51,7 +53,7 @@ export class ViewSession {
   }
 
   onPage = (page) => {
-    void this.selectPage(page);
+    void this.selectPage(page).catch(() => {});
   };
 
   pageID(page) {
@@ -68,6 +70,7 @@ export class ViewSession {
   }
 
   async sendTabs() {
+    if (this.closed) return;
     const pages = this.record.context.pages();
     const tabs = await Promise.all(pages.map(async (page) => ({
       id: this.pageID(page),
@@ -79,22 +82,25 @@ export class ViewSession {
   }
 
   async selectPage(page) {
+    if (this.closed) return;
     if (!page || page.isClosed() || page === this.page) {
       await this.sendTabs();
       return;
     }
     const generation = ++this.generation;
+    this.clearPendingFrame();
     const previous = this.cdp;
     this.cdp = null;
+    this.page = page;
     this.removePageListeners();
     if (previous) {
       await previous.send('Page.stopScreencast').catch(() => {});
       await previous.detach().catch(() => {});
     }
-    this.page = page;
+    if (this.closed || generation !== this.generation) return;
     await page.bringToFront().catch(() => {});
     const cdp = await this.record.context.newCDPSession(page);
-    if (generation !== this.generation) {
+    if (this.closed || generation !== this.generation) {
       await cdp.detach().catch(() => {});
       return;
     }
@@ -104,20 +110,31 @@ export class ViewSession {
       void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
       if (this.cdp !== cdp || !socketOpen(this.socket) || this.socket.bufferedAmount > 2_000_000) return;
       const now = Date.now();
-      if (now - this.lastFrameAt < 66) return;
-      this.lastFrameAt = now;
       const viewport = page.viewportSize() || { width: 1280, height: 720 };
-      this.send({ type: 'frame', data: event.data, width: viewport.width, height: viewport.height });
+      this.pendingFrame = { type: 'frame', data: event.data, width: viewport.width, height: viewport.height };
+      if (!this.frameTimer) {
+        this.frameTimer = setTimeout(() => {
+          this.frameTimer = null;
+          const frame = this.pendingFrame;
+          this.pendingFrame = null;
+          if (frame && !this.closed && this.cdp === cdp) {
+            this.lastFrameAt = Date.now();
+            this.send(frame);
+          }
+        }, Math.max(0, 66 - (now - this.lastFrameAt)));
+        this.frameTimer.unref?.();
+      }
     });
     const onClose = () => {
       if (this.page !== page) return;
       this.generation++;
+      this.clearPendingFrame();
       this.page = null;
       this.cdp = null;
       this.removePageListeners();
       void cdp.detach().catch(() => {});
       const replacement = this.record.context.pages().at(-1);
-      if (replacement) void this.selectPage(replacement);
+      if (replacement) void this.selectPage(replacement).catch(() => {});
       else void this.sendTabs();
     };
     const onFrameNavigated = (frame) => {
@@ -134,8 +151,8 @@ export class ViewSession {
       maxHeight: 720,
       everyNthFrame: 1,
     });
-    const initial = await page.screenshot({ type: 'jpeg', quality: 72 }).catch(() => null);
-    if (initial) {
+    const initial = await page.screenshot({ type: 'jpeg', quality: 72, timeout: 2_000 }).catch(() => null);
+    if (initial && !this.closed && this.cdp === cdp) {
       const viewport = page.viewportSize() || { width: 1280, height: 720 };
       this.send({ type: 'frame', data: initial.toString('base64'), width: viewport.width, height: viewport.height });
     }
@@ -157,6 +174,9 @@ export class ViewSession {
       switch (message.type) {
         case 'mouse':
           if (!page || page.isClosed() || !cdp) return;
+          // Native context menus and X11 primary-selection paste are outside
+          // the page-only viewer and can touch shared desktop clipboard state.
+          if (['right', 'middle'].includes(message.button)) break;
           await cdp.send('Input.dispatchMouseEvent', {
             type: message.eventType,
             x: Number(message.x) || 0,
@@ -171,14 +191,37 @@ export class ViewSession {
           break;
         case 'key':
           if (!page || page.isClosed() || !cdp) return;
+          // Chromium's native clipboard belongs to the shared process. Never
+          // allow remote Ctrl/Cmd+C/X/V to access that cross-context resource.
+          const key = String(message.key).toLowerCase();
+          const mods = Number(message.modifiers) || 0;
+          const clipboardAction = (mods & 6) && ['c', 'x', 'v'].includes(key) ? key :
+            key === 'insert' && (mods & 2) ? 'c' : key === 'insert' && (mods & 8) ? 'v' :
+            key === 'delete' && (mods & 8) ? 'x' : '';
+          if (clipboardAction) {
+            if (message.eventType === 'keyDown' && clipboardAction !== 'v') {
+              const selected = await this.copySelection();
+              if (selected && clipboardAction === 'x') await cdp.send('Input.insertText', { text: '' });
+            }
+            break;
+          }
+          // Native menus are outside the page stream and could expose shared
+          // clipboard actions. The viewer supplies explicit scoped controls.
+          if (key === 'contextmenu' || (key === 'f10' && (mods & 8))) break;
           await cdp.send('Input.dispatchKeyEvent', {
             type: message.eventType === 'keyUp' ? 'keyUp' : 'keyDown',
             key: String(message.key || ''),
             code: String(message.code || ''),
             text: message.eventType === 'keyDown' ? String(message.text || '') : '',
-            unmodifiedText: message.eventType === 'keyDown' ? String(message.text || '') : '',
+            unmodifiedText: message.eventType === 'keyDown' ? String(message.unmodifiedText ?? message.text ?? '') : '',
             modifiers: Number(message.modifiers) || 0,
+            windowsVirtualKeyCode: Number(message.windowsVirtualKeyCode) || 0,
+            autoRepeat: Boolean(message.autoRepeat),
+            ...(key === 'a' && (mods & 4) && message.eventType !== 'keyUp' ? { commands: ['selectAll'] } : {}),
           });
+          break;
+        case 'copySelection':
+          await this.copySelection();
           break;
         case 'insertText':
           if (page && !page.isClosed() && cdp && typeof message.text === 'string')
@@ -216,9 +259,35 @@ export class ViewSession {
     }
   }
 
+  async copySelection() {
+    if (!this.page || this.page.isClosed()) return '';
+    // A project's window may be in the background of the shared X display.
+    // Its active element still owns this viewer's selection. Follow focused
+    // iframe elements only, never other pages/contexts or the OS clipboard.
+    let frame = this.page.mainFrame();
+    for (let depth = 0; depth < 16; depth++) {
+      const active = await frame.evaluateHandle(() => document.activeElement);
+      const nested = await active.asElement()?.contentFrame();
+      await active.dispose();
+      if (!nested) break;
+      frame = nested;
+    }
+    const text = await frame.evaluate(() => {
+        const field = document.activeElement;
+        if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) {
+          if (field instanceof HTMLInputElement && field.type === 'password') return '';
+          return field.value.slice(field.selectionStart ?? 0, field.selectionEnd ?? 0).slice(0, 32_768);
+        }
+        return String(window.getSelection() || '').slice(0, 32_768);
+      }).catch(() => '');
+    this.send({ type: 'clipboard', text });
+    return text;
+  }
+
   async close() {
     if (this.closed) return;
     this.closed = true;
+    this.clearPendingFrame();
     if (this.tabsTimer) clearInterval(this.tabsTimer);
     this.tabsTimer = null;
     this.record.context.off('page', this.onPage);
@@ -231,6 +300,12 @@ export class ViewSession {
       await cdp.send('Page.stopScreencast').catch(() => {});
       await cdp.detach().catch(() => {});
     }
+  }
+
+  clearPendingFrame() {
+    clearTimeout(this.frameTimer);
+    this.frameTimer = null;
+    this.pendingFrame = null;
   }
 
   removePageListeners() {

@@ -10,7 +10,8 @@ export default defineConfig({
     outDir: resolve(__dirname, "../backend/public"),
     emptyOutDir: true,
     sourcemap: false,
-    target: "es2020",
+    // noVNC's browser capability probe uses top-level await.
+    target: "es2022",
     chunkSizeWarningLimit: 600,
   },
   server: {

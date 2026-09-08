@@ -473,6 +473,21 @@ func (h *ProjectHandler) proxyAgentBrowserView(w http.ResponseWriter, r *http.Re
 		httptransport.SendErr(w, http.StatusBadGateway, "agent browser view unavailable")
 		return
 	}
+	// Only the transport and opaque pairing ID are client-selected. The
+	// upstream host, project authorization, and path remain server-owned.
+	query := r.URL.Query()
+	transport := query.Get("transport")
+	if transport != "" {
+		viewer := query.Get("viewer")
+		if (transport != "vnc" && transport != "control") || !validBrowserViewerID(viewer) {
+			httptransport.SendErr(w, http.StatusBadRequest, "invalid browser transport")
+			return
+		}
+		upstreamQuery := upstream.Query()
+		upstreamQuery.Set("transport", transport)
+		upstreamQuery.Set("viewer", viewer)
+		upstream.RawQuery = upstreamQuery.Encode()
+	}
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	direct := proxy.Director
 	proxy.Director = func(request *http.Request) {
@@ -488,6 +503,22 @@ func (h *ProjectHandler) proxyAgentBrowserView(w http.ResponseWriter, r *http.Re
 		httptransport.SendErr(response, http.StatusBadGateway, "agent browser view unavailable")
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func validBrowserViewerID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, ch := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if ch != '-' {
+				return false
+			}
+		} else if !(ch >= '0' && ch <= '9') && !(ch >= 'a' && ch <= 'f') && !(ch >= 'A' && ch <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // browserViewOriginAllowed prevents an untrusted project preview on a sibling

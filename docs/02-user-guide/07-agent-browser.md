@@ -46,7 +46,8 @@ immediately available to the browser-enabled agent, but not to another project.
 
 ```mermaid
 flowchart TB
-    Human["Human controls<br/>live canvas"] -->|"authenticated WebSocket"| Context["Project BrowserContext"]
+    Human["Human controls<br/>noVNC viewer"] -->|"authenticated VNC WebSocket"| Adapter["Project page<br/>CDP-to-VNC adapter"]
+    Adapter --> Context["Project BrowserContext"]
     Agent["Claude, Codex, or MiniMax<br/>browser skill"] -->|"project-scoped HTTP MCP"| Context
     Context --> Chromium["One shared headed Chromium"]
     Context --> Profile["Encrypted project<br/>storage state"]
@@ -56,6 +57,21 @@ There is one Agent Browser session per project, not one per user, chat, or
 agent run. Its viewport is fixed at **1280×720**. Human and agent input can
 collide, so pause one side before the other types or clicks. Different projects
 can be logged into different accounts on the same site at the same time.
+
+The human pane uses noVNC for rendering, pointer input, and keyboard handling.
+The broker translates only that project's page frames and input into VNC; it
+does not expose the host desktop. The viewport scales to fit the pane. The
+**Keyboard** button opens a mobile keyboard. Use **Copy** for selected page text
+and **Paste** for clipboard text, including Unicode; a manual text panel is
+available when the local browser denies clipboard permission. Password-field
+contents cannot be copied through the selection control. Remote clipboard
+shortcuts never read the host clipboard shared by Chromium windows.
+
+The display and toolbar reconnect together after a dropped connection, with
+retries between 400 milliseconds and five seconds. A temporary disconnect
+preserves the running project context; input entered while disconnected is not
+queued or replayed. If a browser context is stopped, its saved login state is
+retained but its tabs and unsaved page contents are not.
 
 ## Start, close, and stop mean different things
 
@@ -107,9 +123,11 @@ run also sends activity heartbeats while it is using the session.
   boundary.
 - The live screencast exposes what is in the project's active tab. The agent
   can read and operate all tabs in that same project context through MCP.
-- The canvas streams web-page content, not Chromium's native window chrome.
+- The noVNC virtual screen streams web-page content, not Chromium's native window chrome.
   Browser permission bubbles, certificate dialogs, and other browser-owned UI
   are not available in the human view; browser file selection is also disabled.
+  Right-click native menus and middle-click primary-selection paste are
+  disabled; use the viewer's scoped Copy and Paste controls instead.
 - BrowserContext isolation separates normal web identity and storage, but it is
   not a VM/process security boundary. Projects facing mutually hostile browser
   code still require separate browser processes or servers.

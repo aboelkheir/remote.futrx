@@ -6,6 +6,7 @@ import { BrowserPool } from './browser-pool.mjs';
 import { MCPRouter } from './mcp-router.mjs';
 import { EncryptedStateStore } from './state-store.mjs';
 import { ViewSession } from './view-session.mjs';
+import { VNCViewRegistry, validViewerID } from './vnc-view-registry.mjs';
 
 function positiveInteger(value, fallback) {
   const parsed = Number.parseInt(value || '', 10);
@@ -50,6 +51,7 @@ const pool = new BrowserPool({
 });
 const mcp = new MCPRouter(pool, { outputRoot: process.env.BROWSER_BROKER_OUTPUT_DIR });
 const webSockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
+const vncViews = new VNCViewRegistry();
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -116,12 +118,19 @@ server.on('upgrade', async (request, socket, head) => {
     const url = new URL(request.url, 'http://browser-broker.local');
     const project = projectFromRequest(secret, request);
     const record = project ? pool.records.get(project) : null;
-    if (url.pathname !== '/view' || !record?.viewEnabled) {
+    const transport = url.searchParams.get('transport');
+    const viewerID = url.searchParams.get('viewer');
+    if (url.pathname !== '/view' || !record?.viewEnabled ||
+        (transport !== null && (!['vnc', 'control'].includes(transport) || !validViewerID(viewerID)))) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
     webSockets.handleUpgrade(request, socket, head, (webSocket) => {
+      if (transport) {
+        vncViews.attach(record, transport, viewerID, webSocket);
+        return;
+      }
       if (record.viewers.size >= 4) {
         webSocket.close(1013, 'browser viewer limit reached');
         return;
@@ -149,6 +158,7 @@ async function shutdown() {
   shuttingDown = true;
   clearInterval(saveTimer);
   server.close();
+  vncViews.close();
   webSockets.clients.forEach((socket) => socket.close(1001, 'browser broker restarting'));
   await mcp.close();
   await pool.close();

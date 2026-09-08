@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "@novnc/novnc": "1.7.0",
     "@playwright/mcp": "0.0.80",
     "playwright": "1.63.0-alpha-2026-08-31",
     "ws": "8.21.3"
