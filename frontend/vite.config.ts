@@ -7,7 +7,7 @@ import { resolve } from "node:path";
 export default defineConfig({
   plugins: [preact()],
   build: {
-    outDir: resolve(__dirname, "../backend/public"),
+    outDir: resolve(import.meta.dirname, "../backend/public"),
     emptyOutDir: true,
     sourcemap: false,
     target: "es2020",
