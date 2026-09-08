@@ -41,6 +41,8 @@ func main() {
 	}
 	containerStack := config.NewContainerStack(lxcClient, agentModules.Profiles(), config.ContainerStackOptions{
 		PublicHostname: publicHostname,
+		GitUserName:    cfg.Git.UserName,
+		GitUserEmail:   cfg.Git.UserEmail,
 	})
 	projects := serviceproject.New(
 		storeSet.Projects,
