@@ -42,8 +42,8 @@ func (f failingBrowser) EnsureNesting(_ context.Context, containerName string) e
 
 type failingCodeServer struct{ recorder *callRecorder }
 
-func (f failingCodeServer) Ensure(_ context.Context, containerName, displayName string) error {
-	f.recorder.calls = append(f.recorder.calls, "code-server "+containerName+" "+displayName)
+func (f failingCodeServer) Ensure(_ context.Context, containerName, displayName, projectSlug string) error {
+	f.recorder.calls = append(f.recorder.calls, "code-server "+containerName+" "+displayName+" "+projectSlug)
 	return errors.New("code-server failed")
 }
 
@@ -64,7 +64,7 @@ func TestProvisionKeepsBestEffortCapabilityOrder(t *testing.T) {
 		failingScheduleTools{recorder: recorder},
 	)
 
-	provisioner.Provision(context.Background(), "project-1", "My Project")
+	provisioner.Provision(context.Background(), "project-1", "My Project", "my-project")
 
 	want := []string{
 		"credentials project-1",
@@ -73,7 +73,7 @@ func TestProvisionKeepsBestEffortCapabilityOrder(t *testing.T) {
 		"browser skill project-1",
 		"browser nesting project-1",
 		"schedule tools project-1",
-		"code-server project-1 My Project",
+		"code-server project-1 My Project my-project",
 	}
 	if !slices.Equal(recorder.calls, want) {
 		t.Fatalf("calls: got %q, want %q", recorder.calls, want)
