@@ -106,6 +106,26 @@ func TestEnsureRepairsDriftedKey(t *testing.T) {
 	}
 }
 
+func TestEnsureAddsVitePreviewDomainToManagedProfile(t *testing.T) {
+	responses := map[string]fakeResponse{
+		"profile show " + ProfileName: {out: "name: " + ProfileName},
+		"config show c1":              {out: "profiles:\n- default\n- " + ProfileName + "\n"},
+	}
+	for _, kv := range profileConfig {
+		responses["profile get "+ProfileName+" "+kv[0]] = fakeResponse{out: kv[1] + "\n"}
+	}
+	runner := &fakeRunner{responses: responses}
+
+	if err := NewManager(runner, ".dev.remote.example.test").Ensure(context.Background(), "c1"); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	want := "profile set " + ProfileName + " environment.__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS .dev.remote.example.test"
+	if got := runner.called("profile set"); !slices.Equal(got, []string{want}) {
+		t.Fatalf("profile set calls: got %q, want %q", got, []string{want})
+	}
+}
+
 func TestSetLimitsAppliesContainerOverrides(t *testing.T) {
 	runner := &fakeRunner{responses: map[string]fakeResponse{}}
 
