@@ -66,19 +66,27 @@ func TestRecordReplacesTheSameWindow(t *testing.T) {
 // A window this platform does not understand is dropped rather than filed
 // somewhere: guessing would make the card confidently wrong.
 func TestRecordIgnoresAnUnknownWindow(t *testing.T) {
-	service := New(context.Background(), nil)
+	store := &memoryStore{}
+	service := New(context.Background(), store)
 	service.Record(context.Background(), agent.ProviderClaude, agent.Quota{Window: "monthly"})
 	service.Record(context.Background(), agent.ProviderClaude, agent.Quota{})
 	if view := service.View(); len(view) != 0 {
 		t.Fatalf("expected nothing recorded, got %#v", view)
 	}
+	if store.saves != 0 {
+		t.Fatalf("invalid windows caused %d saves", store.saves)
+	}
 }
 
 func TestRecordIgnoresAnEmptyProvider(t *testing.T) {
-	service := New(context.Background(), nil)
+	store := &memoryStore{}
+	service := New(context.Background(), store)
 	service.Record(context.Background(), "  ", agent.Quota{Window: agent.QuotaWindowSession})
 	if view := service.View(); len(view) != 0 {
 		t.Fatalf("expected nothing recorded, got %#v", view)
+	}
+	if store.saves != 0 {
+		t.Fatalf("empty provider caused %d saves", store.saves)
 	}
 }
 

@@ -33,6 +33,9 @@ type Repository interface {
 
 // Service keeps the readings.
 type Service struct {
+	// Record owns one update through its synchronous save. The state mutex is
+	// separate so readers do not wait for persistence.
+	recordMu sync.Mutex
 	mu       sync.RWMutex
 	readings map[string]AgentQuota
 	store    Repository
@@ -42,7 +45,7 @@ func New(ctx context.Context, store Repository) *Service {
 	service := &Service{readings: map[string]AgentQuota{}, store: store}
 	if store != nil {
 		if loaded, err := store.Load(ctx); err == nil && loaded != nil {
-			service.readings = loaded
+			service.readings = cloneReadings(loaded)
 		}
 	}
 	return service
@@ -61,21 +64,27 @@ func (s *Service) Record(ctx context.Context, provider agent.ProviderID, quota a
 	if id == "" {
 		return
 	}
+	if quota.Window != agent.QuotaWindowSession && quota.Window != agent.QuotaWindowWeekly {
+		return
+	}
+
+	s.recordMu.Lock()
+	defer s.recordMu.Unlock()
 
 	s.mu.Lock()
 	current := s.readings[id]
 	current.Provider = id
 	switch quota.Window {
 	case agent.QuotaWindowSession:
-		current.Session = &quota
+		current.Session = cloneWindow(&quota)
 	case agent.QuotaWindowWeekly:
-		current.Weekly = &quota
-	default:
-		s.mu.Unlock()
-		return
+		current.Weekly = cloneWindow(&quota)
 	}
 	s.readings[id] = current
-	snapshot := s.snapshotLocked()
+	var snapshot map[string]AgentQuota
+	if s.store != nil {
+		snapshot = cloneReadings(s.readings)
+	}
 	s.mu.Unlock()
 
 	if s.store != nil {
@@ -94,16 +103,8 @@ func (s *Service) View() []AgentQuota {
 
 	out := make([]AgentQuota, 0, len(s.readings))
 	for _, reading := range s.readings {
-		out = append(out, reading)
+		out = append(out, reading.clone())
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
-	return out
-}
-
-func (s *Service) snapshotLocked() map[string]AgentQuota {
-	out := make(map[string]AgentQuota, len(s.readings))
-	for id, reading := range s.readings {
-		out[id] = reading
-	}
 	return out
 }
