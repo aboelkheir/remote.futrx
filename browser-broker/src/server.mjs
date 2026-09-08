@@ -5,7 +5,6 @@ import { controlProjectFromRequest, projectFromRequest } from './auth.mjs';
 import { BrowserPool } from './browser-pool.mjs';
 import { MCPRouter } from './mcp-router.mjs';
 import { EncryptedStateStore } from './state-store.mjs';
-import { ViewSession } from './view-session.mjs';
 import { VNCViewRegistry, validViewerID } from './vnc-view-registry.mjs';
 
 function positiveInteger(value, fallback) {
@@ -121,25 +120,13 @@ server.on('upgrade', async (request, socket, head) => {
     const transport = url.searchParams.get('transport');
     const viewerID = url.searchParams.get('viewer');
     if (url.pathname !== '/view' || !record?.viewEnabled ||
-        (transport !== null && (!['vnc', 'control'].includes(transport) || !validViewerID(viewerID)))) {
+        !['vnc', 'control'].includes(transport) || !validViewerID(viewerID)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
     webSockets.handleUpgrade(request, socket, head, (webSocket) => {
-      if (transport) {
-        vncViews.attach(record, transport, viewerID, webSocket);
-        return;
-      }
-      if (record.viewers.size >= 4) {
-        webSocket.close(1013, 'browser viewer limit reached');
-        return;
-      }
-      const session = new ViewSession(record, webSocket);
-      void session.start().catch((error) => {
-        console.error(`browser-broker: viewer failed: ${error.message}`);
-        webSocket.close(1011, 'browser viewer failed');
-      });
+      vncViews.attach(record, transport, viewerID, webSocket);
     });
   } catch {
     socket.destroy();
@@ -158,7 +145,7 @@ async function shutdown() {
   shuttingDown = true;
   clearInterval(saveTimer);
   server.close();
-  vncViews.close();
+  await vncViews.close();
   webSockets.clients.forEach((socket) => socket.close(1001, 'browser broker restarting'));
   await mcp.close();
   await pool.close();

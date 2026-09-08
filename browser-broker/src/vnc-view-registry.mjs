@@ -32,7 +32,7 @@ export class VNCViewRegistry {
       pair.timer = setTimeout(() => pair.close(1008, 'browser channels did not connect'), this.pairingTimeoutMs);
       pair.timer.unref?.();
     }
-    if (pair.record !== record || pair[transport]) {
+    if (pair.closing || pair.record !== record || pair[transport]) {
       socket.close(1008, 'browser channel already attached');
       return;
     }
@@ -40,7 +40,7 @@ export class VNCViewRegistry {
   }
 
   close() {
-    for (const pair of this.pairs.values()) pair.close(1001, 'browser broker restarting');
+    return Promise.all([...this.pairs.values()].map((pair) => pair.close(1001, 'browser broker restarting')));
   }
 }
 
@@ -98,7 +98,7 @@ class VNCViewPair extends EventEmitter {
     this.rfb = new RFBConnection(this.vnc, {
       onInput: (message) => this.input(message),
       onReady: () => {
-        if (this.readyState !== WebSocket.OPEN) return;
+        if (this.closing || this.readyState !== WebSocket.OPEN) return;
         clearTimeout(this.timer);
         this.timer = null;
         this.session = new ViewSession(this.record, this);
@@ -121,6 +121,9 @@ class VNCViewPair extends EventEmitter {
   }
 
   input(message) {
+    const release = (message.type === 'key' && message.eventType === 'keyUp') ||
+      (message.type === 'mouse' && message.eventType === 'mouseReleased');
+    if (this.closing && !release) return;
     if (this.readyState === WebSocket.OPEN && this.session) {
       this.emit('message', Buffer.from(JSON.stringify(message)));
       return this.session.messageQueue;
@@ -138,23 +141,26 @@ class VNCViewPair extends EventEmitter {
   }
 
   close(code = 1000, reason = 'browser view closed') {
-    if (this.closing) return;
+    if (this.closing) return this.closePromise;
     this.closing = true;
+    this.session?.freeze();
     clearTimeout(this.timer);
     clearInterval(this.heartbeat);
-    this.record.viewers.delete(this);
-    this.onClose();
     if (this.session && code !== 1000) {
       console.info(`browser-broker: viewer closed project=${this.record.project} code=${code} reason=${reason}`);
     }
     // Release held VNC keys before detaching CDP. This cleanup never replays
     // input onto a replacement connection or another project.
-    void Promise.resolve(this.rfb?.close()).finally(() => {
+    this.closePromise = Promise.resolve(this.rfb?.close()).finally(async () => {
       this.readyState = WebSocket.CLOSED;
+      await this.session?.close();
       this.emit('close');
+      this.record.viewers.delete(this);
+      this.onClose();
     });
     for (const channel of [this.vnc, this.control]) {
       if (channel && channel.readyState < WebSocket.CLOSING) channel.close(code, reason);
     }
+    return this.closePromise;
   }
 }

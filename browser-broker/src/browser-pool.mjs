@@ -118,7 +118,7 @@ export class BrowserPool {
     const record = this.records.get(project);
     if (!record) return;
     record.viewEnabled = false;
-    for (const viewer of record.viewers) viewer.close(1001, 'browser view stopped');
+    await Promise.all([...record.viewers].map((viewer) => viewer.close(1001, 'browser view stopped')));
     record.viewers.clear();
   }
 

@@ -70,7 +70,7 @@ export class ViewSession {
   }
 
   async sendTabs() {
-    if (this.closed) return;
+    if (this.closed || this.closing) return;
     const pages = this.record.context.pages();
     const tabs = await Promise.all(pages.map(async (page) => ({
       id: this.pageID(page),
@@ -82,7 +82,7 @@ export class ViewSession {
   }
 
   async selectPage(page) {
-    if (this.closed) return;
+    if (this.closed || this.closing) return;
     if (!page || page.isClosed() || page === this.page) {
       await this.sendTabs();
       return;
@@ -108,7 +108,9 @@ export class ViewSession {
     this.lastFrameAt = 0;
     cdp.on('Page.screencastFrame', (event) => {
       void cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
-      if (this.cdp !== cdp || !socketOpen(this.socket) || this.socket.bufferedAmount > 2_000_000) return;
+      // The RFB writer retains the newest frame during congestion. Dropping
+      // it here would strand a static page on an old image after recovery.
+      if (this.closing || this.cdp !== cdp || !socketOpen(this.socket)) return;
       const now = Date.now();
       const viewport = page.viewportSize() || { width: 1280, height: 720 };
       this.pendingFrame = { type: 'frame', data: event.data, width: viewport.width, height: viewport.height };
@@ -167,6 +169,9 @@ export class ViewSession {
     } catch {
       return;
     }
+    const release = (message.type === 'key' && message.eventType === 'keyUp') ||
+      (message.type === 'mouse' && message.eventType === 'mouseReleased');
+    if (this.closing && !release) return;
     const page = this.page;
     const cdp = this.cdp;
     this.record.lastActivity = Date.now();
@@ -284,22 +289,28 @@ export class ViewSession {
     return text;
   }
 
-  async close() {
-    if (this.closed) return;
-    this.closed = true;
+  freeze() {
+    if (this.closing) return;
+    this.closing = true;
+    this.generation++;
     this.clearPendingFrame();
     if (this.tabsTimer) clearInterval(this.tabsTimer);
     this.tabsTimer = null;
     this.record.context.off('page', this.onPage);
     this.removePageListeners();
-    this.record.viewers.delete(this.socket);
-    this.generation++;
+  }
+
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.freeze();
     const cdp = this.cdp;
     this.cdp = null;
     if (cdp) {
       await cdp.send('Page.stopScreencast').catch(() => {});
       await cdp.detach().catch(() => {});
     }
+    this.record.viewers.delete(this.socket);
   }
 
   clearPendingFrame() {
