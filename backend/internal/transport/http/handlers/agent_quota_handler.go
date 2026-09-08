@@ -31,12 +31,13 @@ func (h *AgentQuotaHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agent-quota", h.handle)
 }
 
-// handle answers any signed-in user.
+// handle answers any signed-in user, or a caller on an auth-disabled install.
 //
 // An empty list is a real answer, not an error: readings only arrive while an
 // agent runs, so a platform nobody has used yet genuinely knows nothing. The
-// browser is expected to say "no reading yet" rather than draw an empty gauge.
+// browser hides the section until a provider has reported a window.
 func (h *AgentQuotaHandler) handle(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		httptransport.SendErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -45,10 +46,12 @@ func (h *AgentQuotaHandler) handle(w http.ResponseWriter, r *http.Request) {
 		sendAgentQuota(w, nil)
 		return
 	}
-	email, _, err := httptransport.NewPrincipalResolver(h.auth).EmailAndAdmin(r.Context(), r)
-	if err != nil || email == "" {
-		httptransport.SendErr(w, http.StatusUnauthorized, "authentication required")
-		return
+	if h.auth != nil {
+		email, _, err := httptransport.NewPrincipalResolver(h.auth).EmailAndAdmin(r.Context(), r)
+		if err != nil || email == "" {
+			httptransport.SendErr(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
 	}
 	sendAgentQuota(w, h.quota.View())
 }

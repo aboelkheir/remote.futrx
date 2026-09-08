@@ -41,12 +41,16 @@ func TestAgentQuotaResponseAndGuards(t *testing.T) {
 		{"nil handler", http.MethodGet, nil, "", 200, `{"agents":[]}`},
 		{"nil service", http.MethodGet, NewAgentQuotaHandler(nil, nil), "", 200, `{"agents":[]}`},
 		{"method before availability", http.MethodPost, nil, "", 405, `{"error":"method not allowed"}`},
-		{"no auth configured", http.MethodGet, NewAgentQuotaHandler(&stubAgentQuota{}, nil), "", 401, `{"error":"authentication required"}`},
+		{"no auth configured", http.MethodGet, NewAgentQuotaHandler(&stubAgentQuota{}, nil), "", 200, `{"agents":[]}`},
 		{"missing session", http.MethodGet, NewAgentQuotaHandler(&stubAgentQuota{}, auth), "", 401, `{"error":"authentication required"}`},
+		{"invalid session", http.MethodGet, NewAgentQuotaHandler(&stubAgentQuota{}, auth), "invalid", 401, `{"error":"authentication required"}`},
 		{"nil readings", http.MethodGet, NewAgentQuotaHandler(&stubAgentQuota{}, auth), token, 200, `{"agents":[]}`},
 		{"reported zero", http.MethodGet, NewAgentQuotaHandler(&stubAgentQuota{agents: []agentquota.AgentQuota{{
 			Provider: "codex", Session: &agent.Quota{Window: agent.QuotaWindowSession, UsedPercent: &zero, MeasuredAt: 123},
 		}}}, auth), token, 200, `{"agents":[{"provider":"codex","session":{"window":"session","usedPercent":0,"measuredAt":123}}]}`},
+		{"reported window without auth", http.MethodGet, NewAgentQuotaHandler(&stubAgentQuota{agents: []agentquota.AgentQuota{{
+			Provider: "claude", Weekly: &agent.Quota{Window: agent.QuotaWindowWeekly, Status: "allowed", MeasuredAt: 456},
+		}}}, nil), "", 200, `{"agents":[{"provider":"claude","weekly":{"window":"weekly","status":"allowed","measuredAt":456}}]}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(test.method, "/api/agent-quota", nil)
@@ -60,6 +64,9 @@ func TestAgentQuotaResponseAndGuards(t *testing.T) {
 			}
 			if response.Header().Get("Content-Type") != "application/json" {
 				t.Fatalf("content type = %q", response.Header().Get("Content-Type"))
+			}
+			if response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("cache control = %q", response.Header().Get("Cache-Control"))
 			}
 			if test.handler != nil && test.handler.quota != nil {
 				wantViews := 0
