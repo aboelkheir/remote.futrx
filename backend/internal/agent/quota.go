@@ -35,8 +35,9 @@ const (
 // Quota is one window's state at one moment.
 type Quota struct {
 	Window QuotaWindow `json:"window"`
-	// UsedPercent is 0–100 where the CLI reports it, and nil where it does
-	// not. Claude reports a status rather than a number, so a Claude window
+	// UsedPercent is a nonnegative percentage where the CLI reports it, and
+	// nil where it does not. Over-limit readings may exceed 100.
+	// Claude reports a status rather than a number, so a Claude window
 	// usually has a reset time and no percentage: absent is not zero.
 	UsedPercent *float64 `json:"usedPercent,omitempty"`
 	// ResetsAt is a Unix second. Zero means the CLI did not say.
