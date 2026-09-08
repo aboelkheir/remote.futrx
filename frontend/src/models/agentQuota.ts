@@ -1,0 +1,28 @@
+/**
+ * Subscription quota: how much of a Claude or ChatGPT plan is left.
+ *
+ * This is not the usage dashboard. That counts what this platform spent; a
+ * plan is spent from everywhere the operator works, so only the vendor knows
+ * the total. Provider integrations obtain that total through their native
+ * protocols, so every reading is a last-seen snapshot and carries when it was
+ * taken.
+ */
+export type QuotaWindowKind = "session" | "weekly";
+
+export interface QuotaWindow {
+  window: QuotaWindowKind;
+  /** Nonnegative percentage; may exceed 100 when a plan is over its limit. */
+  usedPercent?: number;
+  /** Unix seconds. 0 when the CLI did not say. */
+  resetsAt?: number;
+  /** The CLI's own word: "allowed", "allowed_warning", "rejected". */
+  status?: string;
+  /** Unix ms — when this platform saw it, not when it was true. */
+  measuredAt: number;
+}
+
+export interface AgentQuota {
+  provider: string;
+  session?: QuotaWindow;
+  weekly?: QuotaWindow;
+}

@@ -2,26 +2,18 @@ package prompt
 
 import (
 	"context"
-	crand "crypto/rand"
-	"encoding/hex"
-	"strconv"
 	"time"
 
 	"github.com/futrx-com/remote.futrx.com/internal/agent"
 	servicechat "github.com/futrx-com/remote.futrx.com/internal/service/chat"
-	serviceusage "github.com/futrx-com/remote.futrx.com/internal/service/usage"
 )
 
 func (rnr *Service) emitAgentEvent(
 	ctx context.Context,
 	id servicechat.ID,
-	provider agent.ProviderID,
 	ev agent.Event,
 	emit func(ChatEvent),
 ) {
-	if ev.Provider == "" {
-		ev.Provider = provider
-	}
 	if ev.Type == agent.EventSessionUpdated && ev.SessionID != "" {
 		_, _ = rnr.store.Update(ctx, id, func(m *ChatMeta) {
 			m.SetSessionID(servicechat.Provider(ev.Provider), ev.SessionID)
@@ -36,6 +28,13 @@ func (rnr *Service) emitAgentEvent(
 	if ok {
 		emit(chatEvent)
 	}
+}
+
+func withDefaultProvider(ev agent.Event, provider agent.ProviderID) agent.Event {
+	if ev.Provider == "" {
+		ev.Provider = provider
+	}
+	return ev
 }
 
 func chatEventFromAgentEvent(ev agent.Event) (ChatEvent, bool) {
@@ -126,56 +125,4 @@ func agentEventMessageID(event agent.Event) string {
 		return event.MessageID
 	}
 	return event.ItemID
-}
-
-// ledgerRun is the run-scoped context a usage entry needs. It is captured
-// once per prompt so the per-event hook stays allocation free.
-type ledgerRun struct {
-	runID     string
-	chatID    servicechat.ID
-	projectID string
-	userEmail string
-	provider  agent.ProviderID
-	model     string
-	scheduled bool
-}
-
-// recordRunUsage forwards a finished turn to the usage ledger. Only completed
-// runs are recorded: a failed turn's token counts are not persisted in the
-// chat event log, so counting them here would make the ledger impossible to
-// rebuild from disk.
-func (rnr *Service) recordRunUsage(ctx context.Context, run ledgerRun, ev agent.Event) {
-	if rnr.usage == nil || ev.Type != agent.EventRunCompleted {
-		return
-	}
-	at := ev.T
-	if at == 0 {
-		at = time.Now().UnixMilli()
-	}
-	provider := ev.Provider
-	if provider == "" {
-		provider = run.provider
-	}
-	// The turn is over, so a cancelled request context must not stop the
-	// ledger write that describes it.
-	rnr.usage.RecordRun(context.WithoutCancel(ctx), serviceusage.RunEvent{
-		At:        at,
-		ChatID:    string(run.chatID),
-		ProjectID: run.projectID,
-		RunID:     run.runID,
-		UserEmail: run.userEmail,
-		Provider:  string(provider),
-		Model:     run.model,
-		Usage:     ev.Usage,
-		Scheduled: run.scheduled,
-	})
-}
-
-// newLedgerRunID identifies one prompt run across the events it produces.
-func newLedgerRunID() string {
-	var raw [8]byte
-	if _, err := crand.Read(raw[:]); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
-	}
-	return hex.EncodeToString(raw[:])
 }

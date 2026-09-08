@@ -17,6 +17,7 @@ The application does not use an external database service. Durable metadata is s
 ├── users.json
 ├── local-admin.json
 ├── oauth.json
+├── agent-quota.json                    last provider-reported plan windows
 ├── session.key
 ├── scheduled-tasks/tasks.json          standing definitions, claims, and run state
 └── uploads/tmp/                        tus chunks and sidecars
@@ -152,6 +153,46 @@ Writes atomically replace the document. The scheduler loop is in-memory, but it
 reconstructs deadlines and abandons stale claims after a backend restart.
 
 Rewind rewrites `events.jsonl` atomically with only events before the selected timestamp and best-effort rebuilds that chat's derived index rows. Chat deletion removes the chat directory and corresponding index rows.
+
+## Agent quota snapshots
+
+Subscription windows follow a separate path from the usage ledger. Claude's
+adapter owns its stream normalization in `claude/quota.go`. Live Codex runs
+use `codexharness/app_server_quota.go` for account rate-limit notifications
+and a best-effort initial reading requested after turn startup. Only the Codex
+product's recognized five-hour and seven-day durations become plan windows;
+other products and durations are ignored. An initial response cannot replace
+a window already updated by a live notification. Quota read failures do not
+fail or delay normal turn startup. The prompt service records observations
+through its `QuotaRecorder` contract; quota events are not chat transcript
+events. `service/agent/quota` owns the latest session and weekly readings per
+provider and returns providers in stable order.
+
+`stores/fileagentquota` persists snapshots to `DATA_DIR/agent-quota.json` using
+a mode-`0600` temporary file and rename. Updates and their synchronous,
+best-effort writes are serialized so an older save cannot overwrite a newer
+snapshot. Reads use a separate lock and do not wait for file writes. Inputs,
+loaded data, saved snapshots, and returned views have independent window and
+percentage values. Prompt cancellation does not cancel an observation's
+persistence. Missing or unreadable snapshots do not prevent startup. Without
+a repository, readings remain available for the lifetime of the process.
+
+`GET /api/agent-quota` exposes the snapshots to signed-in users, or without a
+session when application authentication is disabled. Responses are not cached.
+In the frontend, `agentQuotaApi` validates the response and
+`models/agentQuota.ts` describes its data. The Usage section's `usePlanQuota`
+hook owns a serialized refresh every 15 seconds after the previous request
+settles, with a 10-second request timeout and cancellation on unmount. A
+failed refresh retains the last successful snapshot; a successful empty
+response clears it. Its adjacent `planQuotaState` projection builds display
+contracts in `models/planQuota.ts`, using labels, tones, and thresholds from
+`config/planQuota.ts`. Missing percentages stay absent, so a status-only
+window never acquires a zero-percent bar. A reported zero has zero bar width;
+over-limit values retain their reported percentage with the bar capped at
+100%. Each window shows its own observation age. Ages and reset countdowns
+advance every 15 seconds even if refreshes fail, and an expired reset is
+marked as awaiting a new reading. Refreshing this endpoint reads stored
+observations; it does not query a provider or start an agent run.
 
 ## Project persistence
 

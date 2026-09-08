@@ -26,6 +26,7 @@ const (
 	appServerThreadRequestID
 	appServerTurnRequestID
 	appServerInterruptRequestID
+	appServerRateLimitsRequestID
 )
 
 type appServerRun struct {
@@ -48,6 +49,7 @@ type appServerRun struct {
 	protocolErr        error
 	terminalEvent      *agent.Event
 	openCollaborations map[string]agent.Event
+	quotaReadPending   bool
 }
 
 // Run owns one Codex app-server process for one Remote turn. Provider adapters
@@ -253,6 +255,10 @@ func (run *appServerRun) handleEnvelope(envelope appServerEnvelope) bool {
 	if !ok {
 		return true
 	}
+	if responseID == appServerRateLimitsRequestID {
+		run.handleInitialQuota(envelope)
+		return true
+	}
 	if envelope.Error != nil {
 		run.protocolErr = run.responseError(responseID, envelope.Error.Message)
 		return false
@@ -452,6 +458,9 @@ func (run *appServerRun) handleResponse(responseID appServerRequestID, resultJSO
 			"id":     appServerTurnRequestID,
 			"params": buildAppServerTurnParams(run.req, result.Thread.ID, result.Model),
 		})
+		if run.protocolErr == nil {
+			run.requestInitialQuota()
+		}
 
 	case appServerTurnRequestID:
 		var result struct {

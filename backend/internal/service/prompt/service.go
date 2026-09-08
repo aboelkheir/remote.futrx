@@ -13,7 +13,6 @@ import (
 	servicechat "github.com/futrx-com/remote.futrx.com/internal/service/chat"
 	serviceproject "github.com/futrx-com/remote.futrx.com/internal/service/project"
 	"github.com/futrx-com/remote.futrx.com/internal/service/runhub"
-	serviceusage "github.com/futrx-com/remote.futrx.com/internal/service/usage"
 )
 
 type ChatEvent = servicechat.Event
@@ -81,13 +80,6 @@ type ScheduleToolIssuer interface {
 	IssueScheduleTool(context.Context, ScheduleToolRequest) (ScheduleToolAccess, error)
 }
 
-// UsageRecorder receives one entry per completed agent run. It is the only
-// thing the prompt service knows about token accounting; pricing, storage and
-// aggregation all live in the usage service.
-type UsageRecorder interface {
-	RecordRun(ctx context.Context, event serviceusage.RunEvent)
-}
-
 type Option func(*Service)
 
 // StartGate blocks new agent runs while an external host job owns the
@@ -106,12 +98,6 @@ func WithStartGate(gate StartGate) Option {
 func WithScheduleToolIssuer(issuer ScheduleToolIssuer) Option {
 	return func(service *Service) {
 		service.scheduleTools = issuer
-	}
-}
-
-func WithUsageRecorder(recorder UsageRecorder) Option {
-	return func(service *Service) {
-		service.usage = recorder
 	}
 }
 
@@ -139,6 +125,7 @@ type Service struct {
 	agentPolicy   AgentPolicy
 	scheduleTools ScheduleToolIssuer
 	usage         UsageRecorder
+	quota         QuotaRecorder
 	startGate     StartGate
 	interactions  interactionResponseRouter
 }
@@ -398,7 +385,6 @@ func (rnr *Service) runPromptAs(
 		chatID:    id,
 		projectID: string(meta.ProjectID),
 		userEmail: input.Actor.Email,
-		provider:  providerID,
 		model:     meta.Model,
 		scheduled: input.ScheduledTaskID != "",
 	}
@@ -425,10 +411,10 @@ func (rnr *Service) runPromptAs(
 			RuntimeEnv:           runtimeEnv,
 			InteractionResponses: interactionResponses,
 		}, func(ev agent.Event) {
-			// qa added the provider argument; the ledger hook is this
-			// branch's and sits after the emit as before.
-			rnr.emitAgentEvent(ctx, id, providerID, ev, emit)
+			ev = withDefaultProvider(ev, providerID)
+			rnr.emitAgentEvent(ctx, id, ev, emit)
 			rnr.recordRunUsage(ctx, ledger, ev)
+			rnr.recordQuota(ctx, ev)
 		})
 	}
 

@@ -48,6 +48,12 @@ func (p *Parser) ParseLine(line []byte) ([]agent.Event, error) {
 			}))
 		}
 
+	case "token_count":
+		// Codex hangs its subscription windows off the token counter rather
+		// than announcing them, so both arrive together and only while a turn
+		// is running.
+		events = append(events, p.quotaEvents(now, rawLine, raw.RateLimits)...)
+
 	case "item.started":
 		events = append(events, p.itemStarted(now, rawLine, raw.Item)...)
 
@@ -244,6 +250,10 @@ type streamMsg struct {
 	Error    struct {
 		Message string `json:"message,omitempty"`
 	} `json:"error,omitempty"`
+
+	// RateLimits rides on a "token_count" event and carries the
+	// subscription's two rolling windows.
+	RateLimits json.RawMessage `json:"rate_limits,omitempty"`
 }
 
 type codexItem struct {

@@ -10,10 +10,11 @@ import (
 )
 
 type appServerEventParser struct {
-	req           agent.RunRequest
-	providerLabel string
-	itemText      map[string]string
-	lastUsage     json.RawMessage
+	req              agent.RunRequest
+	providerLabel    string
+	itemText         map[string]string
+	lastUsage        json.RawMessage
+	liveQuotaWindows map[agent.QuotaWindow]bool
 }
 
 type appServerNativeIDs struct {
@@ -34,6 +35,10 @@ func newAppServerEventParser(req agent.RunRequest, providerLabel string) *appSer
 func (parser *appServerEventParser) ParseNotification(method string, raw json.RawMessage) []agent.Event {
 	now := time.Now().UnixMilli()
 	switch method {
+	case "account/rateLimits/updated":
+		// Preserve the native notification alongside normalized observations.
+		return append(parser.nativeEvent(now, method, raw), parser.quotaEvents(now, method, raw, false)...)
+
 	case "item/agentMessage/delta", "item/plan/delta":
 		var params appServerDeltaParams
 		if json.Unmarshal(raw, &params) != nil || params.Delta == "" {
