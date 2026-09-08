@@ -61,10 +61,10 @@ func (rnr *Service) recordQuota(ctx context.Context, ev agent.Event) {
 	}
 	// A cancelled request context must not throw away a reading that arrived
 	// before the cancel: the window is real whether or not the turn finished.
-	if ctx == nil || ctx.Err() != nil {
+	if ctx == nil {
 		ctx = context.Background()
 	}
-	rnr.quota.Record(ctx, ev.Provider, *ev.Quota)
+	rnr.quota.Record(context.WithoutCancel(ctx), ev.Provider, *ev.Quota)
 }
 
 // recordRunUsage forwards a finished turn to the usage ledger. Only completed

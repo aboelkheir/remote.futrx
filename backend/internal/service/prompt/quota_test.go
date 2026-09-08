@@ -19,9 +19,10 @@ func (r *recordingQuota) Record(ctx context.Context, provider agent.ProviderID, 
 	r.provider = provider
 }
 
-func TestRecordQuotaPreservesContextHandling(t *testing.T) {
+func TestRecordQuotaPreservesValuesWithoutCancellation(t *testing.T) {
 	type contextKey struct{}
-	live := context.WithValue(context.Background(), contextKey{}, "run")
+	live, cancelLive := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "run"))
+	defer cancelLive()
 	cancelled, cancel := context.WithCancel(live)
 	cancel()
 	for _, ctx := range []context.Context{nil, live, cancelled} {
@@ -36,12 +37,11 @@ func TestRecordQuotaPreservesContextHandling(t *testing.T) {
 		if got.Err() != nil {
 			t.Fatalf("recording context is cancelled: %v", got.Err())
 		}
-		if ctx == live {
-			if got != live {
-				t.Fatal("active context was replaced")
-			}
-		} else if got.Value(contextKey{}) != nil {
-			t.Fatal("fallback context retained cancelled request values")
+		if ctx != nil && got.Value(contextKey{}) != "run" {
+			t.Fatal("recording context lost request values")
+		}
+		if got.Done() != nil {
+			t.Fatal("a later prompt cancellation can still cancel quota persistence")
 		}
 	}
 }
