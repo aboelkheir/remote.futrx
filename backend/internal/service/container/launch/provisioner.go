@@ -16,6 +16,7 @@ type BrowserProvisioner interface {
 
 type WorkspaceProvisioner interface {
 	EnsureSkillLinks(ctx context.Context, containerName string) error
+	EnsureGitIdentity(ctx context.Context, containerName string) error
 }
 
 type CodeServerProvisioner interface {
@@ -61,6 +62,7 @@ func NewProvisioner(
 func (p *Provisioner) Provision(ctx context.Context, containerName, displayName, projectSlug string) {
 	_ = p.credentials.EnsureRegistered(ctx, containerName)
 	_ = p.workspace.EnsureSkillLinks(ctx, containerName)
+	_ = p.workspace.EnsureGitIdentity(ctx, containerName)
 	_ = p.browser.EnsureScript(ctx, containerName)
 	_ = p.browser.EnsureSkill(ctx, containerName)
 	_ = p.browser.EnsureNesting(ctx, containerName)
