@@ -19,7 +19,7 @@ type WorkspaceProvisioner interface {
 }
 
 type CodeServerProvisioner interface {
-	Ensure(ctx context.Context, containerName, displayName string) error
+	Ensure(ctx context.Context, containerName, displayName, projectSlug string) error
 }
 
 type ScheduleToolsProvisioner interface {
@@ -58,7 +58,7 @@ func NewProvisioner(
 }
 
 // Provision applies launch-time capabilities in their stable order.
-func (p *Provisioner) Provision(ctx context.Context, containerName, displayName string) {
+func (p *Provisioner) Provision(ctx context.Context, containerName, displayName, projectSlug string) {
 	_ = p.credentials.EnsureRegistered(ctx, containerName)
 	_ = p.workspace.EnsureSkillLinks(ctx, containerName)
 	_ = p.browser.EnsureScript(ctx, containerName)
@@ -67,5 +67,5 @@ func (p *Provisioner) Provision(ctx context.Context, containerName, displayName 
 	if p.scheduleTools != nil {
 		_ = p.scheduleTools.Ensure(ctx, containerName)
 	}
-	_ = p.codeServer.Ensure(ctx, containerName, displayName)
+	_ = p.codeServer.Ensure(ctx, containerName, displayName, projectSlug)
 }
