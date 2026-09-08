@@ -37,9 +37,6 @@ export function PlanQuotaSection() {
               <span class="text-[13px] font-medium text-ink-100">
                 {row.label}
               </span>
-              <span class="text-[11px] text-ink-400">
-                measured {row.measured}
-              </span>
             </div>
             {row.windows.map((window) => (
               <WindowRow key={window.kind} window={window} />
@@ -79,6 +76,7 @@ function WindowRow({ window }: { window: PlanQuotaWindow }) {
           />
         </div>
       )}
+      <p class="mt-0.5 text-[11px] text-ink-400">measured {window.measured}</p>
       {window.reset && (
         <p class="mt-0.5 text-[11px] text-ink-400">{window.reset}</p>
       )}

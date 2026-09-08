@@ -9,12 +9,12 @@ export interface PlanQuotaWindow {
   tone: QuotaTone;
   percent: number | null;
   barPercent: number | null;
+  measured: string;
   reset: string;
 }
 
 export interface PlanQuotaRow {
   provider: string;
   label: string;
-  measured: string;
   windows: PlanQuotaWindow[];
 }

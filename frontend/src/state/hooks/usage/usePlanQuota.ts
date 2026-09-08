@@ -3,31 +3,28 @@ import { agentQuotaApi } from "../../../api/agents/agentQuotaApi";
 import type { AgentQuota } from "../../../models/agentQuota";
 import type { PlanQuotaRow } from "../../../models/planQuota";
 import { projectPlanQuotaRows } from "./planQuotaState";
+import { startPlanQuotaUpdates } from "./planQuotaUpdates";
 
 export interface PlanQuotaState {
   rows: PlanQuotaRow[];
   loading: boolean;
 }
 
-/** Owns the Usage tab's one-shot subscription-quota request lifecycle. */
+/** Reads current snapshots while the Usage tab is mounted and ages each reading. */
 export function usePlanQuota(): PlanQuotaState {
   const [quotas, setQuotas] = useState<AgentQuota[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [nowMs, setNowMs] = useState(Date.now);
 
-  useEffect(() => {
-    let cancelled = false;
-    agentQuotaApi
-      .list()
-      .then((value) => !cancelled && setQuotas(value))
-      .catch(() => !cancelled && setQuotas([]))
-      .finally(() => !cancelled && setLoading(false));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  useEffect(() => startPlanQuotaUpdates({
+    load: (signal) => agentQuotaApi.list(signal),
+    onSnapshot: setQuotas,
+    onSettled: () => setLoading(false),
+    onClock: setNowMs,
+  }), []);
 
   return {
-    rows: projectPlanQuotaRows(quotas ?? [], Date.now()),
+    rows: projectPlanQuotaRows(quotas ?? [], nowMs),
     loading,
   };
 }

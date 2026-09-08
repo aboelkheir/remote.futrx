@@ -1,6 +1,5 @@
 import { PROVIDER_DISPLAY_LABELS } from "../../../config/agents.ts";
 import {
-  PLAN_QUOTA_MIN_VISIBLE_BAR_PERCENT,
   PLAN_QUOTA_SPENT_PERCENT,
   PLAN_QUOTA_WARNING_PERCENT,
   PLAN_QUOTA_WINDOW_LABELS,
@@ -32,7 +31,6 @@ export function projectPlanQuotaRows(
       {
         provider: quota.provider,
         label: PROVIDER_DISPLAY_LABELS[quota.provider] ?? quota.provider,
-        measured: measuredAgo(quota.session ?? quota.weekly, nowMs),
         windows,
       },
     ];
@@ -45,26 +43,31 @@ function projectWindow(
   nowMs: number
 ): PlanQuotaWindow | null {
   if (!window) return null;
-  const percent = typeof window.usedPercent === "number" ? Math.round(window.usedPercent) : null;
+  const usedPercent = reportedPercent(window.usedPercent);
+  const percent = usedPercent === null ? null : Math.round(usedPercent);
   return {
     kind,
     label: PLAN_QUOTA_WINDOW_LABELS[kind],
-    tone: quotaTone(window),
+    tone: quotaTone(window, usedPercent),
     percent,
-    barPercent:
-      percent === null
-        ? null
-        : Math.min(100, Math.max(PLAN_QUOTA_MIN_VISIBLE_BAR_PERCENT, percent)),
+    barPercent: percent === null ? null : Math.min(100, percent),
+    measured: measuredAgo(window, nowMs),
     reset: resetsIn(window, nowMs),
   };
 }
 
-function quotaTone(window: QuotaWindow): QuotaTone {
-  const status = (window.status ?? "").toLowerCase();
+function reportedPercent(value: number | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function quotaTone(window: QuotaWindow, usedPercent: number | null): QuotaTone {
+  const status = typeof window.status === "string" ? window.status.toLowerCase() : "";
   if (status === "rejected" || status === "exhausted") return "spent";
-  if (typeof window.usedPercent === "number") {
-    if (window.usedPercent >= PLAN_QUOTA_SPENT_PERCENT) return "spent";
-    if (window.usedPercent >= PLAN_QUOTA_WARNING_PERCENT) return "warn";
+  if (usedPercent !== null) {
+    if (usedPercent >= PLAN_QUOTA_SPENT_PERCENT) return "spent";
+    if (usedPercent >= PLAN_QUOTA_WARNING_PERCENT) return "warn";
     return "ok";
   }
   if (status === "allowed_warning") return "warn";
@@ -73,9 +76,9 @@ function quotaTone(window: QuotaWindow): QuotaTone {
 }
 
 function resetsIn(window: QuotaWindow, nowMs: number): string {
-  if (!window.resetsAt) return "";
+  if (!Number.isFinite(window.resetsAt) || !window.resetsAt || window.resetsAt < 0) return "";
   const seconds = window.resetsAt - Math.floor(nowMs / 1000);
-  if (seconds <= 0) return "resets any moment";
+  if (seconds <= 0) return "reset passed; awaiting a new reading";
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   if (hours >= 24) {
@@ -86,8 +89,8 @@ function resetsIn(window: QuotaWindow, nowMs: number): string {
   return `resets in ${minutes}m`;
 }
 
-function measuredAgo(window: QuotaWindow | undefined, nowMs: number): string {
-  if (!window?.measuredAt) return "";
+function measuredAgo(window: QuotaWindow, nowMs: number): string {
+  if (!Number.isFinite(window.measuredAt) || window.measuredAt <= 0) return "at an unknown time";
   const minutes = Math.floor((nowMs - window.measuredAt) / 60000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;

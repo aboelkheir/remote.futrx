@@ -11,7 +11,7 @@ export type QuotaWindowKind = "session" | "weekly";
 
 export interface QuotaWindow {
   window: QuotaWindowKind;
-  /** 0–100, absent when the CLI reports a status instead of a number. */
+  /** Nonnegative percentage; may exceed 100 when a plan is over its limit. */
   usedPercent?: number;
   /** Unix seconds. 0 when the CLI did not say. */
   resetsAt?: number;
@@ -25,8 +25,4 @@ export interface AgentQuota {
   provider: string;
   session?: QuotaWindow;
   weekly?: QuotaWindow;
-}
-
-export interface AgentQuotaResponse {
-  agents?: AgentQuota[];
 }
