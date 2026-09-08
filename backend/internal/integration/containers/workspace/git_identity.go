@@ -11,6 +11,7 @@ import (
 )
 
 const gitIdentityTimeout = 10 * time.Second
+const globalGitConfigPath = "/root/.gitconfig"
 
 type GitIdentity struct {
 	Name  string
@@ -41,7 +42,7 @@ func (p *Provisioner) EnsureGitIdentity(ctx context.Context, containerName strin
 		current, err := command.RunWithTimeout(
 			ctx, p.runner, gitIdentityTimeout,
 			"exec", containerName, "--env", "HOME=/root", "--",
-			"git", "config", "--global", "--get", setting[0],
+			"git", "config", "--file", globalGitConfigPath, "--get", setting[0],
 		)
 		if err == nil && strings.TrimSpace(current) == setting[1] {
 			continue
@@ -49,7 +50,7 @@ func (p *Provisioner) EnsureGitIdentity(ctx context.Context, containerName strin
 		if output, err := command.RunWithTimeout(
 			ctx, p.runner, gitIdentityTimeout,
 			"exec", containerName, "--env", "HOME=/root", "--",
-			"git", "config", "--global", setting[0], setting[1],
+			"git", "config", "--file", globalGitConfigPath, setting[0], setting[1],
 		); err != nil {
 			return fmt.Errorf("configure git %s: %w; output: %s", setting[0], err, output)
 		}
