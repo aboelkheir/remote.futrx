@@ -54,10 +54,10 @@ func TestMissingGitIdentityIsConfiguredForRootHome(t *testing.T) {
 	}
 
 	want := []string{
-		"exec project-1 --env HOME=/root -- git config --global --get user.name",
-		"exec project-1 --env HOME=/root -- git config --global user.name Example Developer",
-		"exec project-1 --env HOME=/root -- git config --global --get user.email",
-		"exec project-1 --env HOME=/root -- git config --global user.email developer@example.com",
+		"exec project-1 --env HOME=/root -- git config --file /root/.gitconfig --get user.name",
+		"exec project-1 --env HOME=/root -- git config --file /root/.gitconfig user.name Example Developer",
+		"exec project-1 --env HOME=/root -- git config --file /root/.gitconfig --get user.email",
+		"exec project-1 --env HOME=/root -- git config --file /root/.gitconfig user.email developer@example.com",
 	}
 	if !slices.Equal(runner.calls, want) {
 		t.Fatalf("git config calls = %q, want %q", runner.calls, want)
