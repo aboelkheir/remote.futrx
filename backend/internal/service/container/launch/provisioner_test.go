@@ -23,6 +23,11 @@ func (f failingWorkspace) EnsureSkillLinks(_ context.Context, containerName stri
 	return errors.New("workspace failed")
 }
 
+func (f failingWorkspace) EnsureGitIdentity(_ context.Context, containerName string) error {
+	f.recorder.calls = append(f.recorder.calls, "git identity "+containerName)
+	return errors.New("git identity failed")
+}
+
 type failingBrowser struct{ recorder *callRecorder }
 
 func (f failingBrowser) EnsureScript(_ context.Context, containerName string) error {
@@ -69,6 +74,7 @@ func TestProvisionKeepsBestEffortCapabilityOrder(t *testing.T) {
 	want := []string{
 		"credentials project-1",
 		"workspace project-1",
+		"git identity project-1",
 		"browser script project-1",
 		"browser skill project-1",
 		"browser nesting project-1",

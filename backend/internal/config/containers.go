@@ -56,6 +56,8 @@ type ContainerStackOptions struct {
 	AgentInstructions  []byte
 	ImageBuildProgress serviceimage.ProgressReporter
 	PublicHostname     string
+	GitUserName        string
+	GitUserEmail       string
 }
 
 // ProjectDependencies exposes only the capabilities consumed by project
@@ -113,6 +115,10 @@ func NewContainerStack(
 		profiles,
 		publisher,
 		options.AgentInstructions,
+		containerworkspace.GitIdentity{
+			Name:  options.GitUserName,
+			Email: options.GitUserEmail,
+		},
 	)
 	runtimeAssets := containerruntimeassets.NewAdapter(runner, publisher)
 	images := serviceimage.NewBuilder(
