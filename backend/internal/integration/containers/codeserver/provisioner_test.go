@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -32,7 +33,7 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 
 	wantEnv := "CODE_SERVER_PROXY_URI=https://my-project--{{port}}.dev.remote.example.test"
 	wantViteEnv := "VITE_ALLOWED_HOST=.dev.remote.example.test"
-	foundProxy, foundVite := false, false
+	foundProxy, foundVite, foundGitEnvironment := false, false, false
 	for _, call := range runner.calls {
 		for _, arg := range call {
 			if arg == wantEnv {
@@ -41,6 +42,10 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 			if arg == wantViteEnv {
 				foundVite = true
 			}
+			if strings.Contains(arg, "Environment=HOME=/root") &&
+				strings.Contains(arg, "Environment=GIT_CONFIG_GLOBAL=/root/.gitconfig") {
+				foundGitEnvironment = true
+			}
 		}
 	}
 	if !foundProxy {
@@ -48,5 +53,8 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 	}
 	if !foundVite {
 		t.Fatalf("Vite allowed host %q missing from calls: %#v", wantViteEnv, runner.calls)
+	}
+	if !foundGitEnvironment {
+		t.Fatalf("code-server Git environment missing from calls: %#v", runner.calls)
 	}
 }

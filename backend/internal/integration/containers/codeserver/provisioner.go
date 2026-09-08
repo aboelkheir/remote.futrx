@@ -58,7 +58,7 @@ dropin="$dropin_dir/10-remote-preview.conf"
 install -d -m 0755 "$dropin_dir"
 tmp="$(mktemp "$dropin_dir/.10-remote-preview.conf.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
-printf '[Service]\nEnvironment=VSCODE_PROXY_URI=%s\nEnvironment=__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=%s\n' \
+printf '[Service]\nEnvironment=HOME=/root\nEnvironment=GIT_CONFIG_GLOBAL=/root/.gitconfig\nEnvironment=VSCODE_PROXY_URI=%s\nEnvironment=__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=%s\n' \
     "$CODE_SERVER_PROXY_URI" "$VITE_ALLOWED_HOST" >"$tmp"
 chmod 0644 "$tmp"
 if [ -f "$dropin" ] && cmp -s "$tmp" "$dropin"; then
