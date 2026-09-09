@@ -33,7 +33,7 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 
 	wantEnv := "CODE_SERVER_PROXY_URI=https://my-project--{{port}}.dev.remote.example.test"
 	wantViteEnv := "VITE_ALLOWED_HOST=.dev.remote.example.test"
-	foundProxy, foundVite, foundGitEnvironment := false, false, false
+	foundProxy, foundVite, foundGitEnvironment, foundGitHubAuthSetting := false, false, false, false
 	for _, call := range runner.calls {
 		for _, arg := range call {
 			if arg == wantEnv {
@@ -46,6 +46,9 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 				strings.Contains(arg, "Environment=GIT_CONFIG_GLOBAL=/root/.gitconfig") {
 				foundGitEnvironment = true
 			}
+			if strings.Contains(arg, `settings["github.gitAuthentication"] = false`) {
+				foundGitHubAuthSetting = true
+			}
 		}
 	}
 	if !foundProxy {
@@ -56,5 +59,8 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 	}
 	if !foundGitEnvironment {
 		t.Fatalf("code-server Git environment missing from calls: %#v", runner.calls)
+	}
+	if !foundGitHubAuthSetting {
+		t.Fatalf("code-server GitHub authentication setting missing from calls: %#v", runner.calls)
 	}
 }

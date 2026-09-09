@@ -156,6 +156,7 @@ cat > /root/.local/share/code-server/User/settings.json <<'JSON'
   "workbench.settings.enableNaturalLanguageSearch": false,
   "git.autorefresh": true,
   "git.decorations.enabled": true,
+  "github.gitAuthentication": false,
   "scm.diffDecorations": "gutter",
   "files.autoSave": "afterDelay",
   "files.autoSaveDelay": 1500,
