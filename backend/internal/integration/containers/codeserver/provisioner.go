@@ -71,6 +71,34 @@ if systemctl is-active --quiet code-server.service; then
 fi
 `
 
+// Keep browser IDE Git operations on the platform-managed credential helper.
+// VS Code's GitHub extension otherwise maintains a separate OAuth session in
+// container-local secret storage and asks the user to sign in again whenever
+// that IDE state is recreated, even though the shared gh credential is valid.
+const configureGitAuthentication = `
+set -euo pipefail
+settings_dir=/root/.local/share/code-server/User
+settings="$settings_dir/settings.json"
+install -d -m 0755 "$settings_dir"
+SETTINGS_PATH="$settings" node - <<'NODE'
+const fs = require("fs");
+const path = process.env.SETTINGS_PATH;
+let settings = {};
+try {
+  settings = JSON.parse(fs.readFileSync(path, "utf8"));
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+if (settings["github.gitAuthentication"] !== false) {
+  settings["github.gitAuthentication"] = false;
+  const temporary = path + ".tmp";
+  fs.writeFileSync(temporary, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(temporary, path);
+}
+NODE
+chmod 0600 "$settings"
+`
+
 // EnsureCodeServer installs and enables the on-demand code-server stack inside
 // an existing project container. Idempotent and best-effort, mirroring
 // other container migration helpers. Existing units are kept, while their
@@ -104,6 +132,18 @@ func (p *Provisioner) Ensure(ctx context.Context, containerName, displayName, pr
 		); err != nil {
 			return fmt.Errorf("configure code-server preview URI: %w; output: %s", err, output.TruncateTail(out, 1000))
 		}
+	}
+
+	// Converge existing containers too. The install script only runs for new
+	// containers, while the OAuth-loop fix must also reach current workspaces.
+	if out, err := command.RunWithTimeout(
+		ctx,
+		p.runner,
+		10*time.Second,
+		"exec", containerName,
+		"--", "bash", "-c", configureGitAuthentication,
+	); err != nil {
+		return fmt.Errorf("configure code-server Git authentication: %w; output: %s", err, output.TruncateTail(out, 1000))
 	}
 
 	// Always enable --now: arms a freshly-installed socket, and recovers a
