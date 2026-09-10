@@ -71,3 +71,32 @@ func TestParserUsesPartSuffixWhenOpenCodeOmitsDelta(t *testing.T) {
 	}
 	t.Fatal("parser did not emit the appended text suffix")
 }
+
+func TestParserHandlesOpenCodeRunJSONL(t *testing.T) {
+	p := NewParser(agent.RunRequest{ConversationID: "conv-1", Model: defaultModel})
+	lines := []string{
+		`{"type":"step_start","sessionID":"session-1","part":{"id":"step-1","sessionID":"session-1","messageID":"message-1","type":"step-start"}}`,
+		`{"type":"text","sessionID":"session-1","part":{"id":"text-1","sessionID":"session-1","messageID":"message-1","type":"text","text":"READY"}}`,
+		`{"type":"step_finish","sessionID":"session-1","part":{"id":"finish-1","sessionID":"session-1","messageID":"message-1","type":"step-finish","tokens":{"input":12,"output":5,"reasoning":0,"cache":{"read":2,"write":0}}}}`,
+	}
+	var events []agent.Event
+	for _, line := range lines {
+		parsed, err := p.ParseLine([]byte(line))
+		if err != nil {
+			t.Fatalf("ParseLine(%s): %v", line, err)
+		}
+		events = append(events, parsed...)
+	}
+	if len(events) != 3 {
+		t.Fatalf("event count = %d, want 3: %#v", len(events), events)
+	}
+	if events[0].Type != agent.EventSessionUpdated || events[0].SessionID != "session-1" {
+		t.Fatalf("session event = %#v", events[0])
+	}
+	if events[1].Type != agent.EventAssistantTextDelta || events[1].Text != "READY" {
+		t.Fatalf("text event = %#v", events[1])
+	}
+	if events[2].Type != agent.EventUsageUpdated {
+		t.Fatalf("usage event = %#v", events[2])
+	}
+}

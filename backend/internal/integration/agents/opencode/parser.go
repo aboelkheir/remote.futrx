@@ -35,6 +35,14 @@ func NewParser(req agent.RunRequest) *Parser {
 type wireEvent struct {
 	Type       string          `json:"type"`
 	Properties json.RawMessage `json:"properties"`
+	// The non-interactive `opencode run --format json` CLI writes a compact
+	// event stream. Unlike the server event bus, its parts live directly at
+	// the event root (for example `{"type":"text","part":{...}}`).
+	// Retain both shapes: the former is used by the server, the latter by the
+	// command that Remote actually runs in project containers.
+	SessionID string          `json:"sessionID"`
+	Part      json.RawMessage `json:"part"`
+	Error     json.RawMessage `json:"error"`
 }
 
 type partUpdate struct {
@@ -69,6 +77,18 @@ func (p *Parser) ParseLine(line []byte) ([]agent.Event, error) {
 	}
 	now := time.Now().UnixMilli()
 	switch event.Type {
+	case "step_start", "text", "tool_use", "step_finish":
+		return p.cliPartEvents(now, raw, event)
+	case "error":
+		message := errorMessage(event.Error)
+		if message == "OpenCode session failed" {
+			message = "OpenCode run failed"
+		}
+		events := p.sessionEvents(now, raw, event.SessionID)
+		events = append(events, p.event(now, agent.EventRunFailed, raw, func(ev *agent.Event) {
+			ev.Message = message
+		}))
+		return events, nil
 	case "session.created", "session.updated":
 		var properties struct {
 			Info struct {
@@ -112,6 +132,26 @@ func (p *Parser) ParseLine(line []byte) ([]agent.Event, error) {
 		return events, nil
 	}
 	return nil, nil
+}
+
+// cliPartEvents adapts the documented JSONL output from `opencode run`.
+// `step_start` has no user-visible effect but is the earliest reliable place
+// to capture the session ID for later resume/fork requests.
+func (p *Parser) cliPartEvents(now int64, raw json.RawMessage, event wireEvent) ([]agent.Event, error) {
+	if len(event.Part) == 0 {
+		return p.sessionEvents(now, raw, event.SessionID), nil
+	}
+	var part wirePart
+	if err := json.Unmarshal(event.Part, &part); err != nil {
+		return nil, err
+	}
+	if part.SessionID == "" {
+		part.SessionID = event.SessionID
+	}
+	if event.Type == "step_start" {
+		return p.sessionEvents(now, raw, part.SessionID), nil
+	}
+	return p.partEvents(now, raw, partUpdate{Part: part}), nil
 }
 
 func (p *Parser) sessionEvents(now int64, raw json.RawMessage, id string) []agent.Event {
