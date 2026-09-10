@@ -7,7 +7,7 @@
 <h1 align="center">Give every AI project its own computer.</h1>
 
 <p align="center">
-  Run Codex, MiniMax, Claude Code, Kimi, and Antigravity in separate, always-on Linux workspaces on your own server.
+  Run Codex, MiniMax, OpenCode, Claude Code, Kimi, and Antigravity in separate, always-on Linux workspaces on your own server.
   Use everything from one browser: chat, IDE, terminal, files, Git, live previews, and a shared browser.
 </p>
 
@@ -30,7 +30,7 @@ Remote is an open-source, self-hosted home for AI coding agents.
 Think of every project as its own server-side computer:
 
 - It has a durable workspace, processes, ports, settings, and agent sessions.
-- Codex, MiniMax, Claude Code, Kimi, and Antigravity can work in the same project without moving files between tools.
+- Codex, MiniMax, OpenCode, Claude Code, Kimi, and Antigravity can work in the same project without moving files between tools.
 - The work keeps running on your server when you close your laptop.
 - You can watch, review, edit, restart, or take over from any browser.
 
@@ -74,10 +74,10 @@ mark it read or unread, fork its history, or delete it.
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/assets/readme/feature-model-picker.webp" alt="Remote provider and model picker showing Codex, Claude, MiniMax, Kimi, and Antigravity">
+      <img src="docs/assets/readme/feature-model-picker.webp" alt="Remote provider and model picker showing Codex, Claude, MiniMax, OpenCode, Kimi, and Antigravity">
       <br>
-      <strong>Five agent integrations</strong><br>
-      Switch among Codex, MiniMax, Claude Code, Kimi, and Antigravity. Model choices come from the provider tooling installed in the current project.
+      <strong>Six agent integrations</strong><br>
+      Switch among Codex, MiniMax, OpenCode, Claude Code, Kimi, and Antigravity. Model choices come from the provider tooling installed in the current project.
     </td>
     <td width="50%" valign="top">
       <img src="docs/assets/readme/feature-skills-and-controls.webp" alt="Remote skill picker and per-run controls">
@@ -248,7 +248,7 @@ See the continuous five-step product tour at [remote.futrx.com](https://remote.f
 ## What you get
 
 - **One project computer per project** — an unprivileged LXC container with durable files and agent homes.
-- **Your choice of agent** — use Codex, MiniMax, Claude Code, Kimi, or Antigravity with provider-specific models, thinking, speed, mode, approval, and sandbox controls where supported.
+- **Your choice of agent** — use Codex, MiniMax, OpenCode, Claude Code, Kimi, or Antigravity with provider-specific models, thinking, speed, mode, approval, and sandbox controls where supported.
 - **Durable, inspectable conversations** — stream Markdown, reasoning, tools, questions, errors, and usage; queue, cancel, rewind, fork, mark unread, or continue later.
 - **A complete development surface** — chat, browser IDE, root terminal, files, uploads, Git history, structured diffs, and reusable skills.
 - **Live applications** — Remote finds listening ports, creates project URLs, adds HTTPS, and shows the app beside the conversation.
@@ -262,7 +262,7 @@ See the continuous five-step product tour at [remote.futrx.com](https://remote.f
 flowchart LR
     A["You<br>any browser"] --> B["Remote host<br>identity, routing, lifecycle"]
     B --> C["Project computer<br>one unprivileged LXC container"]
-    C --> D["Codex · MiniMax · Claude · Kimi · Antigravity"]
+    C --> D["Codex · MiniMax · OpenCode · Claude · Kimi · Antigravity"]
     C --> E["IDE · terminal · Git · files"]
     C --> F["Browser · apps · HTTPS previews"]
 ```
@@ -336,7 +336,9 @@ Replace `remote.example.com` with the hostname you set up above. The installer d
 3. Open **Settings → Agents** and connect Codex, Claude Code, or Kimi.
 4. Select **New project**.
 5. To use MiniMax, open **Settings → Agents**, choose the MiniMax sign-in action, and save a Token Plan subscription key. Pay-as-you-go MiniMax API keys are not supported.
-6. Start a chat and describe what you want in normal language.
+
+6. To use OpenCode with TokenRouter, save a TokenRouter API key in **Settings → Agents**, then choose **OpenCode** and **GLM 5.3 Free** in a project chat.
+7. Start a chat and describe what you want in normal language.
 
 Remote will show the agent's progress. When the work is ready, review it in the chat, IDE, terminal, file manager, Git history, or live preview.
 

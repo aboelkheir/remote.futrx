@@ -10,6 +10,7 @@ import (
 	codexagent "github.com/futrx-com/remote.futrx.com/internal/integration/agents/codex"
 	kimiagent "github.com/futrx-com/remote.futrx.com/internal/integration/agents/kimi"
 	minimaxagent "github.com/futrx-com/remote.futrx.com/internal/integration/agents/minimax"
+	opencodeagent "github.com/futrx-com/remote.futrx.com/internal/integration/agents/opencode"
 	agentmodule "github.com/futrx-com/remote.futrx.com/internal/service/agent/module"
 )
 
@@ -18,6 +19,7 @@ func NewAgentModules() (*agentmodule.Catalog, error) {
 		claudeagent.NewFactory,
 		codexagent.NewFactory,
 		minimaxagent.NewFactory,
+		opencodeagent.NewFactory,
 		kimiagent.NewFactory,
 		antigravityagent.NewFactory,
 	}

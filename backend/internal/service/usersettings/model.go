@@ -48,6 +48,7 @@ const (
 	ChatProviderClaude      = agent.ProviderClaude
 	ChatProviderCodex       = agent.ProviderCodex
 	ChatProviderMiniMax     = agent.ProviderMiniMax
+	ChatProviderOpenCode    = agent.ProviderOpenCode
 	ChatProviderKimi        = agent.ProviderKimi
 	ChatProviderAntigravity = agent.ProviderAntigravity
 )

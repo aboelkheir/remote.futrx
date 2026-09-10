@@ -34,6 +34,7 @@ export function providerDisplayLabel(provider?: string): string {
     codex: "Codex",
     kimi: "Kimi",
     minimax: "MiniMax",
+    opencode: "OpenCode",
   };
   return knownLabels[provider] ?? provider
     .split("-")

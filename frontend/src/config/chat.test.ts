@@ -5,6 +5,7 @@ import { providerDisplayLabel } from "./chat.ts";
 test("providerDisplayLabel preserves known provider branding", () => {
   assert.equal(providerDisplayLabel("codex"), "Codex");
   assert.equal(providerDisplayLabel("minimax"), "MiniMax");
+  assert.equal(providerDisplayLabel("opencode"), "OpenCode");
 });
 
 test("providerDisplayLabel formats future provider identifiers", () => {
