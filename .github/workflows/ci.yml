@@ -87,6 +87,7 @@ jobs:
           bash infra/tests/health-check-test.sh
           bash infra/tests/go-toolchain-test.sh
           bash infra/tests/host-agent-install-test.sh
+          bash infra/tests/remote-cli-test.sh
           bash infra/tests/dns-resolve-test.sh
           bash infra/tests/container-forwarding-test.sh
           bash infra/tests/swap-provision-test.sh
