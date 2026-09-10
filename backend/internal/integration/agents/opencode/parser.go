@@ -17,6 +17,7 @@ type Parser struct {
 	text      map[string]string
 	started   map[string]bool
 	completed bool
+	failed    bool
 	usage     agent.Usage
 }
 
@@ -84,6 +85,7 @@ func (p *Parser) ParseLine(line []byte) ([]agent.Event, error) {
 		if message == "OpenCode session failed" {
 			message = "OpenCode run failed"
 		}
+		p.failed = true
 		events := p.sessionEvents(now, raw, event.SessionID)
 		events = append(events, p.event(now, agent.EventRunFailed, raw, func(ev *agent.Event) {
 			ev.Message = message
@@ -113,9 +115,9 @@ func (p *Parser) ParseLine(line []byte) ([]agent.Event, error) {
 			return nil, err
 		}
 		events := p.sessionEvents(now, raw, properties.SessionID)
-		if !p.completed {
-			p.completed = true
-			events = append(events, p.event(now, agent.EventRunCompleted, raw, nil))
+		if completed, ok := p.Complete(); ok {
+			completed.Raw = raw
+			events = append(events, completed)
 		}
 		return events, nil
 	case "session.error":
@@ -126,12 +128,25 @@ func (p *Parser) ParseLine(line []byte) ([]agent.Event, error) {
 		if err := json.Unmarshal(event.Properties, &properties); err != nil {
 			return nil, err
 		}
+		p.failed = true
 		events := p.sessionEvents(now, raw, properties.SessionID)
 		message := errorMessage(properties.Error)
 		events = append(events, p.event(now, agent.EventRunFailed, raw, func(ev *agent.Event) { ev.Message = message }))
 		return events, nil
 	}
 	return nil, nil
+}
+
+// Complete returns the terminal event after the CLI exits successfully.
+// The CLI JSON stream ends at a step boundary and does not emit an explicit
+// session-idle record, so step-finish is not a safe completion signal when an
+// agent still has tools to call.
+func (p *Parser) Complete() (agent.Event, bool) {
+	if p.completed || p.failed {
+		return agent.Event{}, false
+	}
+	p.completed = true
+	return p.event(time.Now().UnixMilli(), agent.EventRunCompleted, nil, nil), true
 }
 
 // cliPartEvents adapts the documented JSONL output from `opencode run`.

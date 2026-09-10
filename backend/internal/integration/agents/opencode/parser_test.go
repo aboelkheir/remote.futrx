@@ -99,4 +99,11 @@ func TestParserHandlesOpenCodeRunJSONL(t *testing.T) {
 	if events[2].Type != agent.EventUsageUpdated {
 		t.Fatalf("usage event = %#v", events[2])
 	}
+	completed, ok := p.Complete()
+	if !ok || completed.Type != agent.EventRunCompleted {
+		t.Fatalf("completion = %#v, ok=%t", completed, ok)
+	}
+	if _, ok := p.Complete(); ok {
+		t.Fatal("completion emitted twice")
+	}
 }

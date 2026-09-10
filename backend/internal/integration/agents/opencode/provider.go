@@ -46,12 +46,20 @@ func (p *Provider) Run(ctx context.Context, req agent.RunRequest, emit func(agen
 	if err != nil {
 		return err
 	}
-	return agentruntime.RunProcess(ctx, cmd, p.Parser(req), emit, agentruntime.ProcessOptions{
+	parser := NewParser(req)
+	err = agentruntime.RunProcess(ctx, cmd, parser, emit, agentruntime.ProcessOptions{
 		Name:           "opencode",
 		LogID:          req.ConversationID,
 		Provider:       agent.ProviderOpenCode,
 		ConversationID: req.ConversationID,
 	})
+	if err != nil {
+		return err
+	}
+	if completed, ok := parser.Complete(); ok {
+		emit(completed)
+	}
+	return nil
 }
 
 func (p *Provider) apiKey() (string, error) {
