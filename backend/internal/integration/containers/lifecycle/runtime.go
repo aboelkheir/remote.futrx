@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/futrx-com/remote.futrx.com/internal/agent"
 	"github.com/futrx-com/remote.futrx.com/internal/integration/containers/command"
 	serviceproject "github.com/futrx-com/remote.futrx.com/internal/service/project"
 )
@@ -123,9 +124,10 @@ func (c *Client) Mounted(ctx context.Context, container, containerPath string) (
 }
 
 // Busy reports whether a host-side agent invocation is currently executing in
-// the project. This is the same signal the legacy shell upgrader used.
+// the project. Ordinary lxc maintenance commands must not block a workspace
+// migration or repair, so agent commands carry an explicit marker.
 func (c *Client) Busy(ctx context.Context, container string) (bool, error) {
-	pattern := regexp.QuoteMeta("lxc exec " + container + " --")
+	pattern := busyProcessPattern(container)
 	cmd := exec.CommandContext(ctx, "pgrep", "-f", "--", pattern)
 	err := cmd.Run()
 	if err == nil {
@@ -136,6 +138,12 @@ func (c *Client) Busy(ctx context.Context, container string) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("detect active agent process: %w", err)
+}
+
+func busyProcessPattern(container string) string {
+	return regexp.QuoteMeta("lxc exec ") + ".*" +
+		regexp.QuoteMeta("--env "+agent.ContainerAgentProcessMarker+" ") + ".*" +
+		regexp.QuoteMeta(container+" --")
 }
 
 func (c *Client) EnsureBootAutostart(ctx context.Context, containerName string) error {

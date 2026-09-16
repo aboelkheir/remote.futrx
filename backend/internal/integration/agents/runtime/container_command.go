@@ -30,7 +30,10 @@ func BuildContainerCommand(ctx context.Context, spec ContainerCommandSpec) *exec
 	if workingDirectory == "" {
 		workingDirectory = agent.ProjectWorkspacePath
 	}
-	args := []string{"exec", "--cwd", workingDirectory}
+	args := []string{
+		"exec", "--cwd", workingDirectory,
+		"--env", agent.ContainerAgentProcessMarker,
+	}
 	for _, entry := range spec.PrefixEnvironment {
 		args = append(args, "--env", entry)
 	}

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"regexp"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/futrx-com/remote.futrx.com/internal/agent"
 	serviceproject "github.com/futrx-com/remote.futrx.com/internal/service/project"
 )
 
@@ -138,6 +140,39 @@ func TestClientMountedDistinguishesAnOrdinaryDirectory(t *testing.T) {
 		t.Fatalf("Mounted() = %t, %v", mounted, err)
 	}
 	assertArgv(t, runner.calls, [][]string{{"exec", "project-1", "--", "mountpoint", "-q", "/workspace"}})
+}
+
+func TestBusyProcessPatternMatchesOnlyMarkedAgentForContainer(t *testing.T) {
+	pattern := regexp.MustCompile(busyProcessPattern("project-1"))
+	tests := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{
+			name: "marked claude invocation",
+			command: "/snap/lxd/current/bin/lxc exec --cwd /workspace --env " +
+				agent.ContainerAgentProcessMarker + " --env HOME=/root project-1 -- claude -p",
+			want: true,
+		},
+		{
+			name:    "ordinary maintenance command",
+			command: "/snap/lxd/current/bin/lxc exec project-1 -- git -C /workspace remote get-url origin",
+		},
+		{
+			name: "marked invocation for another container",
+			command: "/snap/lxd/current/bin/lxc exec --cwd /workspace --env " +
+				agent.ContainerAgentProcessMarker + " project-10 -- claude -p",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pattern.MatchString(tt.command); got != tt.want {
+				t.Fatalf("pattern match = %t, want %t for %q", got, tt.want, tt.command)
+			}
+		})
+	}
 }
 
 func TestClientLifecycleCommandsAndErrorMappings(t *testing.T) {

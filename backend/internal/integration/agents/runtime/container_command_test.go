@@ -31,6 +31,7 @@ func TestBuildContainerCommandPreservesEnvironmentOrderAndPrecedence(t *testing.
 
 	want := []string{
 		"lxc", "exec", "--cwd", "/workspace",
+		"--env", agent.ContainerAgentProcessMarker,
 		"--env", "HOME=/root",
 		"--env", "PROVIDER_HOME=/root/.provider",
 		"--env", "FIRST_SECRET=first",
