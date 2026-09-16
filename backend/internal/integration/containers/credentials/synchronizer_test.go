@@ -24,6 +24,17 @@ type recordingRunner struct {
 	calls     []string
 }
 
+type credentialPullRunner struct {
+	data  []byte
+	calls []string
+}
+
+type markerCredentialValidator struct{}
+
+func (markerCredentialValidator) Valid(data []byte) bool {
+	return strings.Contains(string(data), `"refreshToken":"valid"`)
+}
+
 func (r *recordingRunner) Available() bool { return true }
 
 func (r *recordingRunner) Run(_ context.Context, args ...string) (string, error) {
@@ -34,6 +45,20 @@ func (r *recordingRunner) Run(_ context.Context, args ...string) (string, error)
 }
 
 func (r *recordingRunner) RunStdin(ctx context.Context, _ io.Reader, args ...string) (string, error) {
+	return r.Run(ctx, args...)
+}
+
+func (r *credentialPullRunner) Available() bool { return true }
+
+func (r *credentialPullRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, strings.Join(args, " "))
+	if len(args) == 4 && args[0] == "file" && args[1] == "pull" {
+		return "", os.WriteFile(args[3], r.data, 0o600)
+	}
+	return "", nil
+}
+
+func (r *credentialPullRunner) RunStdin(ctx context.Context, _ io.Reader, args ...string) (string, error) {
 	return r.Run(ctx, args...)
 }
 
@@ -107,6 +132,65 @@ func TestEnsurePushesOnlyStrictlyNewerFilesWithDefaultMode(t *testing.T) {
 	}
 }
 
+func TestEnsureRepairsNewerUnusableContainerCredentials(t *testing.T) {
+	hostPath := filepath.Join(t.TempDir(), "credentials.json")
+	if err := os.WriteFile(hostPath, []byte(`{"refreshToken":"valid"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hostTime := time.Unix(1_700_000_000, 0)
+	if err := os.Chtimes(hostPath, hostTime, hostTime); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &recordingRunner{responses: map[string]runnerResponse{
+		"exec c1 -- stat -c %Y /root/.agent/credentials.json": {out: "1700000060\n"},
+		"exec c1 -- cat /root/.agent/credentials.json":        {out: `{"scopes":["user:inference"]}`},
+	}}
+	spec := provisioning.CredentialSpec{
+		Name:         "agent",
+		ContainerDir: "/root/.agent",
+		Files: []provisioning.CredentialFile{{
+			HostPath: hostPath, ContainerPath: "/root/.agent/credentials.json",
+			Validator: markerCredentialValidator{},
+		}},
+	}
+
+	if err := NewAdapter(runner).EnsureFiles(context.Background(), "c1", spec); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	wantCalls := []string{
+		"exec c1 -- install -d -m 700 /root/.agent",
+		"exec c1 -- stat -c %Y /root/.agent/credentials.json",
+		"exec c1 -- cat /root/.agent/credentials.json",
+		"file push --mode=600 " + hostPath + " c1/root/.agent/credentials.json",
+	}
+	if !reflect.DeepEqual(runner.calls, wantCalls) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, wantCalls)
+	}
+}
+
+func TestEnsureNeverPushesUnusableHostCredentials(t *testing.T) {
+	hostPath := filepath.Join(t.TempDir(), "credentials.json")
+	if err := os.WriteFile(hostPath, []byte(`{"refreshToken":"cleared"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{}
+	spec := provisioning.CredentialSpec{
+		Name: "agent",
+		Files: []provisioning.CredentialFile{{
+			HostPath: hostPath, ContainerPath: "/root/.agent/credentials.json",
+			Validator: markerCredentialValidator{},
+		}},
+	}
+
+	if err := NewAdapter(runner).EnsureFiles(context.Background(), "c1", spec); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("unusable host credential reached container: %v", runner.calls)
+	}
+}
+
 func TestSyncFromContainerSkipsMissingOptionalFileButRejectsMissingRequiredFile(t *testing.T) {
 	runner := &recordingRunner{responses: map[string]runnerResponse{
 		"exec c1 -- test -f /root/.agent/optional.json": {out: "optional absent", err: errors.New("missing")},
@@ -133,5 +217,36 @@ func TestSyncFromContainerSkipsMissingOptionalFileButRejectsMissingRequiredFile(
 	}
 	if !reflect.DeepEqual(runner.calls, wantCalls) {
 		t.Fatalf("calls = %#v, want %#v", runner.calls, wantCalls)
+	}
+}
+
+func TestSyncFromContainerDoesNotReplaceHostWithUnusableCredentials(t *testing.T) {
+	hostDir := t.TempDir()
+	hostPath := filepath.Join(hostDir, "credentials.json")
+	want := []byte(`{"refreshToken":"valid"}`)
+	if err := os.WriteFile(hostPath, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &credentialPullRunner{data: []byte(`{"refreshToken":"cleared"}`)}
+	spec := provisioning.CredentialSpec{
+		Name:    "agent",
+		HostDir: hostDir,
+		Files: []provisioning.CredentialFile{{
+			HostPath: hostPath, ContainerPath: "/root/.agent/credentials.json",
+			PullRequired: true, Validator: markerCredentialValidator{},
+		}},
+	}
+
+	err := NewAdapter(runner).SyncFilesFromContainer(context.Background(), "c1", spec)
+	if err == nil || !strings.Contains(err.Error(), "credentials /root/.agent/credentials.json are unusable") {
+		t.Fatalf("SyncFromContainer error = %v, want unusable credentials error", err)
+	}
+	got, readErr := os.ReadFile(hostPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("host credentials = %q, want unchanged %q", got, want)
 	}
 }

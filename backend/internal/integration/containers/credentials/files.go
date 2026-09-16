@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -92,6 +93,12 @@ func (s *fileSynchronizer) syncFromContainer(ctx context.Context, containerName 
 			}
 			continue
 		}
+		if file.Validator != nil {
+			if err := s.pullValidatedFile(pctx, file, containerName); err != nil {
+				return err
+			}
+			continue
+		}
 		if out, err := s.runner.Run(pctx, "file", "pull", containerName+file.ContainerPath, file.HostPath); err != nil {
 			return fmt.Errorf("pull %s: %w; output: %s",
 				file.ContainerPath, err, out)
@@ -118,12 +125,31 @@ func (s *fileSynchronizer) pushIfNewer(ctx context.Context, file provisioning.Cr
 	if err != nil {
 		return err
 	}
+	if file.Validator != nil {
+		data, err := os.ReadFile(file.HostPath)
+		if err != nil {
+			return err
+		}
+		if !file.Validator.Valid(data) {
+			// A host CLI can clear its credentials too. Never overwrite a
+			// project's working login with a newer but unusable host file.
+			return nil
+		}
+	}
 
 	shouldPush := true
 	if out, err := s.runner.Run(ctx, "exec", containerName, "--", "stat", "-c", "%Y", file.ContainerPath); err == nil {
 		if containerUnix, parseErr := strconv.ParseInt(strings.TrimSpace(out), 10, 64); parseErr == nil {
 			shouldPush = hostInfo.ModTime().Unix() > containerUnix
 		}
+	}
+	if !shouldPush && file.Validator != nil {
+		data, err := s.runner.Run(ctx, "exec", containerName, "--", "cat", file.ContainerPath)
+		if err != nil {
+			// Do not include command output: it may contain credential data.
+			return fmt.Errorf("read container credentials %s: %w", file.ContainerPath, err)
+		}
+		shouldPush = !file.Validator.Valid([]byte(data))
 	}
 	if !shouldPush {
 		return nil
@@ -137,4 +163,35 @@ func (s *fileSynchronizer) pushIfNewer(ctx context.Context, file provisioning.Cr
 		return fmt.Errorf("lxc file push: %w; output: %s", err, out)
 	}
 	return nil
+}
+
+func (s *fileSynchronizer) pullValidatedFile(ctx context.Context, file provisioning.CredentialFile, containerName string) error {
+	// Stage privately beside the destination so a partial pull or cleared
+	// credential document cannot destroy the canonical host login.
+	temporary, err := os.CreateTemp(filepath.Dir(file.HostPath), ".credential-*")
+	if err != nil {
+		return fmt.Errorf("stage credentials: %w", err)
+	}
+	defer os.Remove(temporary.Name())
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if _, err := s.runner.Run(ctx, "file", "pull", containerName+file.ContainerPath, temporary.Name()); err != nil {
+		return fmt.Errorf("pull %s: %w", file.ContainerPath, err)
+	}
+	if err := os.Chmod(temporary.Name(), 0o600); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(temporary.Name())
+	if err != nil {
+		return err
+	}
+	if !file.Validator.Valid(data) {
+		return fmt.Errorf("container credentials %s are unusable; sign in to the provider again", file.ContainerPath)
+	}
+	if err := os.Rename(temporary.Name(), file.HostPath); err != nil {
+		return fmt.Errorf("replace host credentials: %w", err)
+	}
+	now := time.Now()
+	return os.Chtimes(file.HostPath, now, now)
 }

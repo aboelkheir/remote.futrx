@@ -55,6 +55,7 @@ func Profile() provisioning.Profile {
 					ContainerPath: "/root/.claude/.credentials.json",
 					Mode:          "600",
 					PullRequired:  true,
+					Validator:     oauthCredentialValidator{},
 				},
 			},
 			SeedOnLaunch: true,

@@ -58,6 +58,14 @@ type CredentialFile struct {
 	Mode          string
 	PushRequired  bool
 	PullRequired  bool
+	Validator     CredentialValidator
+}
+
+// CredentialValidator supplies provider-owned, local content validation. It
+// does not contact the OAuth service or establish whether a token was revoked.
+// Implementations must be immutable and safe to share across profile clones.
+type CredentialValidator interface {
+	Valid([]byte) bool
 }
 
 // CredentialDirectory describes a dynamic directory of credential files.
