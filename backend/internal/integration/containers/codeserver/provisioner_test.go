@@ -33,7 +33,7 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 
 	wantEnv := "CODE_SERVER_PROXY_URI=https://my-project--{{port}}.dev.remote.example.test"
 	wantViteEnv := "VITE_ALLOWED_HOST=.dev.remote.example.test"
-	foundProxy, foundVite, foundGitEnvironment, foundGitHubAuthSetting := false, false, false, false
+	foundProxy, foundVite, foundGitEnvironment, foundGitHubAuthSetting, foundCodeCommitPathOverride := false, false, false, false, false
 	for _, call := range runner.calls {
 		for _, arg := range call {
 			if arg == wantEnv {
@@ -49,6 +49,9 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 			if strings.Contains(arg, `settings["github.gitAuthentication"] = false`) {
 				foundGitHubAuthSetting = true
 			}
+			if strings.Contains(arg, `git config --global "credential.${url}.useHttpPath" false`) {
+				foundCodeCommitPathOverride = true
+			}
 		}
 	}
 	if !foundProxy {
@@ -62,5 +65,8 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 	}
 	if !foundGitHubAuthSetting {
 		t.Fatalf("code-server GitHub authentication setting missing from calls: %#v", runner.calls)
+	}
+	if !foundCodeCommitPathOverride {
+		t.Fatalf("code-server CodeCommit path override missing from calls: %#v", runner.calls)
 	}
 }

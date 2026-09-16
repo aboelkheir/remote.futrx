@@ -97,6 +97,22 @@ if (settings["github.gitAuthentication"] !== false) {
 }
 NODE
 chmod 0600 "$settings"
+
+# CodeCommit HTTPS Git credentials are scoped to the AWS IAM user, not to one
+# repository path. The host-managed credential file is mounted read-only and
+# may contain the path of whichever repository stored the credential first.
+# Override only CodeCommit URL sections so that credential-store matches by
+# endpoint and the same credential works across every repository in the
+# account. Keep useHttpPath unchanged for all other Git hosts.
+while read -r key _; do
+  url="${key#credential.}"
+  url="${url%.helper}"
+  git config --global "credential.${url}.useHttpPath" false
+done < <(
+  git config --file /etc/gitconfig --get-regexp \
+    '^credential\.https://git-codecommit\..*\.amazonaws\.com\.helper$' \
+    2>/dev/null || true
+)
 `
 
 // EnsureCodeServer installs and enables the on-demand code-server stack inside
