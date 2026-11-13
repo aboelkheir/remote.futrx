@@ -17,6 +17,7 @@ import { PromptTextarea } from "./PromptTextarea";
 import { QueuedPromptList } from "./QueuedPromptList";
 import { SelectedSkillChips } from "./SelectedSkillChips";
 import { SendControls } from "./SendControls";
+import { VoiceButton } from "./VoiceButton";
 import type { ComposerPreferenceActions, ComposerPreferences } from "./preferences";
 
 export interface ChatComposerProps {
@@ -184,6 +185,7 @@ export function ChatComposer({
               unsupported={attachmentsUnsupported}
               onFilesSelected={onFilesSelected}
             />
+            <VoiceButton disconnected={disconnected} text={text} onTextChange={onTextChange} />
 
             <div class="hidden min-w-0 flex-1 items-center gap-1.5 md:flex">
               <ComposerAgentControls

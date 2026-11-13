@@ -22,6 +22,7 @@ import { AppearanceSettings } from "./AppearanceSettings";
 import { NotificationSettings } from "./NotificationSettings";
 import { AgentAuthSettingsList } from "./AgentAuthSettings";
 import { GoogleOAuthSettings } from "./GoogleOAuthSettings";
+import { VoiceTranscriptionSettings } from "./VoiceTranscriptionSettings";
 import { SecuritySettings } from "./SecuritySettings";
 import { ServerInfoSettings } from "./ServerInfoSettings";
 import { UpdatesSettings } from "./UpdatesSettings";
@@ -237,15 +238,18 @@ export function SettingsPage({
 
             {activeTab === "agents" && (
               isAdmin ? (
-                <div class="rounded-card border border-line bg-surface overflow-hidden">
-                  <div class="px-4 py-3 border-b border-line">
-                    <div class="text-[14.5px] font-semibold text-ink-50">Agent authentication</div>
-                    <div class="text-[12.5px] text-ink-300 mt-0.5 leading-snug">
-                      Configure each agent using its declared host-managed, project-external, or no-auth flow.
+                <div class="space-y-4">
+                  <VoiceTranscriptionSettings />
+                  <div class="rounded-card border border-line bg-surface overflow-hidden">
+                    <div class="px-4 py-3 border-b border-line">
+                      <div class="text-[14.5px] font-semibold text-ink-50">Agent authentication</div>
+                      <div class="text-[12.5px] text-ink-300 mt-0.5 leading-snug">
+                        Configure each agent using its declared host-managed, project-external, or no-auth flow.
+                      </div>
                     </div>
-                  </div>
-                  <div class="p-3 space-y-3">
-                    <AgentAuthSettingsList />
+                    <div class="p-3 space-y-3">
+                      <AgentAuthSettingsList />
+                    </div>
                   </div>
                 </div>
               ) : (

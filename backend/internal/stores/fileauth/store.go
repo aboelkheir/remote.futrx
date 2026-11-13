@@ -17,6 +17,7 @@ import (
 )
 
 const agentAPIKeysFile = "agent-api-keys.json"
+const voiceAPIKeyFile = "voice-api-key.json"
 
 type Store struct {
 	dataDir string
@@ -152,6 +153,56 @@ func (s *Store) agentAPIKeysLocked() (map[string]string, error) {
 		return nil, fmt.Errorf("parse %s: %w", agentAPIKeysFile, err)
 	}
 	return keys, nil
+}
+
+func (s *Store) VoiceAPIKey(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := os.ReadFile(filepath.Join(s.dataDir, voiceAPIKeyFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var record struct {
+		APIKey string `json:"apiKey"`
+	}
+	if err := json.Unmarshal(data, &record); err != nil {
+		return "", err
+	}
+	return record.APIKey, nil
+}
+
+func (s *Store) SaveVoiceAPIKey(ctx context.Context, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("API key is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writeJSONLocked(voiceAPIKeyFile, struct {
+		APIKey string `json:"apiKey"`
+	}{APIKey: key})
+}
+
+func (s *Store) DeleteVoiceAPIKey(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := os.Remove(filepath.Join(s.dataDir, voiceAPIKeyFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func (s *Store) LocalAdmin(ctx context.Context) (*serviceauth.LocalAdminCredential, error) {

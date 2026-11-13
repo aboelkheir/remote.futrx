@@ -33,7 +33,6 @@ export function PromptTextarea({
         if (onKeyDown?.(event)) return;
         if (
           event.key === "Enter" &&
-          (event.ctrlKey || event.metaKey) &&
           !event.shiftKey &&
           !event.isComposing
         ) {
@@ -43,8 +42,8 @@ export function PromptTextarea({
       }}
       onPaste={(event) => onPaste(event as ClipboardEvent)}
       rows={1}
-      enterkeyhint="enter"
-      aria-keyshortcuts="Control+Enter Meta+Enter"
+      enterkeyhint="send"
+      aria-keyshortcuts="Enter"
       autocomplete="off"
       autocapitalize="off"
       autocorrect="off"

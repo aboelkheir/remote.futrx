@@ -14,6 +14,7 @@ import (
 	serviceserverinfo "github.com/futrx-com/remote.futrx.com/internal/service/serverinfo"
 	serviceworkspacefiles "github.com/futrx-com/remote.futrx.com/internal/service/workspacefiles"
 	serviceworkspaceide "github.com/futrx-com/remote.futrx.com/internal/service/workspaceide"
+	"github.com/futrx-com/remote.futrx.com/internal/stores/fileauth"
 	httptransport "github.com/futrx-com/remote.futrx.com/internal/transport/http"
 	httphandlers "github.com/futrx-com/remote.futrx.com/internal/transport/http/handlers"
 	httpmiddleware "github.com/futrx-com/remote.futrx.com/internal/transport/http/middleware"
@@ -112,7 +113,8 @@ func NewHTTPHandler(deps Dependencies) (http.Handler, error) {
 			deps.Services.Auth,
 			deps.Services.Agents,
 		),
-		AgentCapabilities: httphandlers.NewAgentCapabilitiesHandler(deps.Services.AgentCapabilities),
+		AgentCapabilities:  httphandlers.NewAgentCapabilitiesHandler(deps.Services.AgentCapabilities),
+		VoiceTranscription: httphandlers.NewVoiceTranscriptionHandler(fileauth.New(deps.DataDir), deps.Services.Auth, nil, ""),
 		UserSettings: httphandlers.NewUserSettingsHandler(
 			deps.Services.UserSettings,
 			deps.Services.Auth,
