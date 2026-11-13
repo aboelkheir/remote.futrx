@@ -191,6 +191,33 @@ func TestEnsureNeverPushesUnusableHostCredentials(t *testing.T) {
 	}
 }
 
+func TestPushOnlyFileAlwaysUsesHostAndNeverPulls(t *testing.T) {
+	hostDir := t.TempDir()
+	hostPath := filepath.Join(hostDir, "settings.json")
+	if err := os.WriteFile(hostPath, []byte(`{"refreshToken":"valid"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingRunner{}
+	spec := provisioning.CredentialSpec{
+		Name: "agent",
+		Files: []provisioning.CredentialFile{{
+			HostPath: hostPath, ContainerPath: "/root/.agent/settings.json",
+			PushOnly: true, Validator: markerCredentialValidator{},
+		}},
+	}
+	adapter := NewAdapter(runner)
+	if err := adapter.EnsureFiles(context.Background(), "c1", spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.SyncFilesFromContainer(context.Background(), "c1", spec); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"file push --mode=600 " + hostPath + " c1/root/.agent/settings.json"}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
 func TestSyncFromContainerSkipsMissingOptionalFileButRejectsMissingRequiredFile(t *testing.T) {
 	runner := &recordingRunner{responses: map[string]runnerResponse{
 		"exec c1 -- test -f /root/.agent/optional.json": {out: "optional absent", err: errors.New("missing")},

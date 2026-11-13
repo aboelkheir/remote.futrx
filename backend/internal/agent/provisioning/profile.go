@@ -58,7 +58,9 @@ type CredentialFile struct {
 	Mode          string
 	PushRequired  bool
 	PullRequired  bool
-	Validator     CredentialValidator
+	// PushOnly keeps host-managed credentials authoritative across container runs.
+	PushOnly  bool
+	Validator CredentialValidator
 }
 
 // CredentialValidator supplies provider-owned, local content validation. It

@@ -57,6 +57,13 @@ func Profile() provisioning.Profile {
 					PullRequired:  true,
 					Validator:     oauthCredentialValidator{},
 				},
+				{
+					HostPath:      "/root/.claude/settings.json",
+					ContainerPath: "/root/.claude/settings.json",
+					Mode:          "600",
+					PushOnly:      true,
+					Validator:     setupTokenValidator{},
+				},
 			},
 			SeedOnLaunch: true,
 		},

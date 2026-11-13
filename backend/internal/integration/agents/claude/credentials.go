@@ -8,6 +8,17 @@ import (
 
 type oauthCredentialValidator struct{}
 
+type setupTokenValidator struct{}
+
+func (setupTokenValidator) Valid(data []byte) bool {
+	var settings struct {
+		Env struct {
+			Token string `json:"CLAUDE_CODE_OAUTH_TOKEN"`
+		} `json:"env"`
+	}
+	return json.Unmarshal(data, &settings) == nil && strings.TrimSpace(settings.Env.Token) != ""
+}
+
 func (oauthCredentialValidator) Valid(data []byte) bool {
 	var credentials struct {
 		OAuth struct {

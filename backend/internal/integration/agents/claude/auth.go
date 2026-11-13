@@ -85,6 +85,9 @@ func NewAuth() *Auth {
 }
 
 func authenticated() bool {
+	if data, err := os.ReadFile(filepath.Join(claudeHomeDir(), "settings.json")); err == nil && (setupTokenValidator{}).Valid(data) {
+		return true
+	}
 	for _, name := range []string{".credentials.json", "credentials.json"} {
 		data, err := os.ReadFile(filepath.Join(claudeHomeDir(), name))
 		if os.IsNotExist(err) {

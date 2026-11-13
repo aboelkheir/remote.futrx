@@ -43,7 +43,7 @@ func TestProfilePreservesClaudeProvisioningPolicy(t *testing.T) {
 	if len(credentials.LegacyDevices) != 1 || credentials.LegacyDevices[0] != "claude-auth" {
 		t.Fatalf("legacy devices = %#v", credentials.LegacyDevices)
 	}
-	if len(credentials.Files) != 2 {
+	if len(credentials.Files) != 3 {
 		t.Fatalf("credential files = %#v", credentials.Files)
 	}
 	if len(profile.PersistentState) != 1 || profile.PersistentState[0] != (provisioning.PersistentDirectory{
@@ -56,6 +56,9 @@ func TestProfilePreservesClaudeProvisioningPolicy(t *testing.T) {
 	}
 	if got := credentials.Files[1]; got.HostPath != "/root/.claude/.credentials.json" || got.ContainerPath != "/root/.claude/.credentials.json" || got.Mode != "600" || got.PushRequired || !got.PullRequired {
 		t.Fatalf("refresh credential = %#v", got)
+	}
+	if got := credentials.Files[2]; got.HostPath != "/root/.claude/settings.json" || got.ContainerPath != "/root/.claude/settings.json" || got.Mode != "600" || !got.PushOnly || got.PushRequired || got.PullRequired || got.Validator == nil {
+		t.Fatalf("setup-token settings = %#v", got)
 	}
 
 	if profile.Instructions == nil || profile.Instructions.Path != "/root/.claude/CLAUDE.md" || profile.Instructions.HashPath != "/root/.claude/.agents-md.sha256" {

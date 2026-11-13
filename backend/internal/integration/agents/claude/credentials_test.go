@@ -56,3 +56,26 @@ func TestAuthenticatedCredentialFilePrecedence(t *testing.T) {
 		t.Fatal("legacy file masked cleared primary credentials")
 	}
 }
+
+func TestAuthenticatedWithSetupToken(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	path := filepath.Join(dir, "settings.json")
+	for _, test := range []struct {
+		name, data string
+		want       bool
+	}{
+		{"valid", `{"env":{"CLAUDE_CODE_OAUTH_TOKEN":"setup-token"}}`, true},
+		{"empty", `{"env":{"CLAUDE_CODE_OAUTH_TOKEN":" "}}`, false},
+		{"malformed", `{"env":`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(test.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := authenticated(); got != test.want {
+				t.Fatalf("authenticated = %v, want %v", got, test.want)
+			}
+		})
+	}
+}

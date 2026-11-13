@@ -86,6 +86,9 @@ func (s *fileSynchronizer) syncFromContainer(ctx context.Context, containerName 
 	defer cancel()
 
 	for _, file := range spec.Files {
+		if file.PushOnly {
+			continue
+		}
 		if out, err := s.runner.Run(pctx, "exec", containerName, "--", "test", "-f", file.ContainerPath); err != nil {
 			if file.PullRequired {
 				return fmt.Errorf("container file missing %s: %w; output: %s",
@@ -138,9 +141,11 @@ func (s *fileSynchronizer) pushIfNewer(ctx context.Context, file provisioning.Cr
 	}
 
 	shouldPush := true
-	if out, err := s.runner.Run(ctx, "exec", containerName, "--", "stat", "-c", "%Y", file.ContainerPath); err == nil {
-		if containerUnix, parseErr := strconv.ParseInt(strings.TrimSpace(out), 10, 64); parseErr == nil {
-			shouldPush = hostInfo.ModTime().Unix() > containerUnix
+	if !file.PushOnly {
+		if out, err := s.runner.Run(ctx, "exec", containerName, "--", "stat", "-c", "%Y", file.ContainerPath); err == nil {
+			if containerUnix, parseErr := strconv.ParseInt(strings.TrimSpace(out), 10, 64); parseErr == nil {
+				shouldPush = hostInfo.ModTime().Unix() > containerUnix
+			}
 		}
 	}
 	if !shouldPush && file.Validator != nil {
