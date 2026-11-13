@@ -58,7 +58,7 @@ dropin="$dropin_dir/10-remote-preview.conf"
 install -d -m 0755 "$dropin_dir"
 tmp="$(mktemp "$dropin_dir/.10-remote-preview.conf.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
-printf '[Service]\nEnvironment=HOME=/root\nEnvironment=GIT_CONFIG_GLOBAL=/root/.gitconfig\nEnvironment=VSCODE_PROXY_URI=%s\nEnvironment=__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=%s\n' \
+printf '[Service]\nEnvironment=HOME=/root\nEnvironment=VSCODE_PROXY_URI=%s\nEnvironment=__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=%s\n' \
     "$CODE_SERVER_PROXY_URI" "$VITE_ALLOWED_HOST" >"$tmp"
 chmod 0644 "$tmp"
 if [ -f "$dropin" ] && cmp -s "$tmp" "$dropin"; then
@@ -77,6 +77,22 @@ fi
 // that IDE state is recreated, even though the shared gh credential is valid.
 const configureGitAuthentication = `
 set -euo pipefail
+
+# GIT_CONFIG_GLOBAL replaces both ~/.gitconfig and ~/.config/git/config. The
+# shared GitHub helper lives in the latter, so remove this legacy service
+# override even when an existing container still has it in its base unit.
+dropin_dir=/etc/systemd/system/code-server.service.d
+dropin="$dropin_dir/20-git-shared-auth.conf"
+install -d -m 0755 "$dropin_dir"
+if [ ! -f "$dropin" ] || ! grep -Fxq 'UnsetEnvironment=GIT_CONFIG_GLOBAL' "$dropin"; then
+  printf '[Service]\nUnsetEnvironment=GIT_CONFIG_GLOBAL\n' > "$dropin"
+  chmod 0644 "$dropin"
+  systemctl daemon-reload
+  if systemctl is-active --quiet code-server.service; then
+    systemctl restart code-server.service
+  fi
+fi
+
 settings_dir=/root/.local/share/code-server/User
 settings="$settings_dir/settings.json"
 install -d -m 0755 "$settings_dir"

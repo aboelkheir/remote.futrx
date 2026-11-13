@@ -34,6 +34,7 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 	wantEnv := "CODE_SERVER_PROXY_URI=https://my-project--{{port}}.dev.remote.example.test"
 	wantViteEnv := "VITE_ALLOWED_HOST=.dev.remote.example.test"
 	foundProxy, foundVite, foundGitEnvironment, foundGitHubAuthSetting, foundCodeCommitPathOverride := false, false, false, false, false
+	foundGitOverrideRemoval := false
 	for _, call := range runner.calls {
 		for _, arg := range call {
 			if arg == wantEnv {
@@ -43,8 +44,11 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 				foundVite = true
 			}
 			if strings.Contains(arg, "Environment=HOME=/root") &&
-				strings.Contains(arg, "Environment=GIT_CONFIG_GLOBAL=/root/.gitconfig") {
+				!strings.Contains(arg, "Environment=GIT_CONFIG_GLOBAL=/root/.gitconfig") {
 				foundGitEnvironment = true
+			}
+			if strings.Contains(arg, "UnsetEnvironment=GIT_CONFIG_GLOBAL") {
+				foundGitOverrideRemoval = true
 			}
 			if strings.Contains(arg, `settings["github.gitAuthentication"] = false`) {
 				foundGitHubAuthSetting = true
@@ -61,7 +65,10 @@ func TestEnsureConfiguresProjectPreviewTemplate(t *testing.T) {
 		t.Fatalf("Vite allowed host %q missing from calls: %#v", wantViteEnv, runner.calls)
 	}
 	if !foundGitEnvironment {
-		t.Fatalf("code-server Git environment missing from calls: %#v", runner.calls)
+		t.Fatalf("code-server inherited Git environment missing from calls: %#v", runner.calls)
+	}
+	if !foundGitOverrideRemoval {
+		t.Fatalf("code-server legacy Git override removal missing from calls: %#v", runner.calls)
 	}
 	if !foundGitHubAuthSetting {
 		t.Fatalf("code-server GitHub authentication setting missing from calls: %#v", runner.calls)
