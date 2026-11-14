@@ -20,7 +20,8 @@ var webRoutePart = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // /auth/, and /internal/ on an app origin can only reach that app's upstream.
 func (h *ApplicationsHandler) WebHandler(platform http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if httptransport.IsApplicationHost(r.Host, h.webHost) {
+		_, legacyIDE := httptransport.LegacyIDEHost(r.Host, h.webHost)
+		if !legacyIDE && httptransport.IsApplicationHost(r.Host, h.webHost) {
 			h.serveWebHost(w, r)
 			return
 		}

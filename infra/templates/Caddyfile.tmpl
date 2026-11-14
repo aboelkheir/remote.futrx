@@ -57,6 +57,9 @@ ${HOSTNAME} {
 # Legacy code-server URLs for existing project workspaces.
 code.${HOSTNAME} {
     encode zstd gzip
+    tls {
+        on_demand
+    }
     route {
         # Admin-session gate (same check as the rest of the platform).
         forward_auth 127.0.0.1:${SERVICE_PORT} {

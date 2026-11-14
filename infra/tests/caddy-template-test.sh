@@ -23,6 +23,8 @@ site_block() {
 
 launcher_block="$(site_block 'code.${HOSTNAME}')"
 [ -n "$launcher_block" ] || fail 'shared code hostname block is missing'
+printf '%s\n' "$launcher_block" | grep -Fq 'on_demand' || \
+    fail 'shared code hostname does not use the on-demand TLS policy'
 printf '%s\n' "$launcher_block" | grep -Fq 'forward_auth 127.0.0.1:${SERVICE_PORT}' || \
     fail 'shared code hostname does not require authentication'
 printf '%s\n' "$launcher_block" | grep -Fq 'root * ${INSTALL_DIR}/infra/launcher' || \
