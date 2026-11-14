@@ -114,6 +114,13 @@ if (settings["github.gitAuthentication"] !== false) {
 NODE
 chmod 0600 "$settings"
 
+# The shared gh login is copied into each project, but Git does not use it
+# until gh registers its HTTPS credential helper. Scope it to GitHub so the
+# separately managed CodeCommit helper remains in effect.
+if gh auth status --hostname github.com >/dev/null 2>&1; then
+  gh auth setup-git --hostname github.com
+fi
+
 # CodeCommit HTTPS Git credentials are scoped to the AWS IAM user, not to one
 # repository path. The host-managed credential file is mounted read-only and
 # may contain the path of whichever repository stored the credential first.
