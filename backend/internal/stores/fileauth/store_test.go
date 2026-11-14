@@ -87,14 +87,24 @@ func TestVoiceAPIKeyPersistsPrivatelyAndCanBeRemoved(t *testing.T) {
 	dir := t.TempDir()
 	store := New(dir)
 	ctx := context.Background()
-	if err := store.SaveVoiceAPIKey(ctx, "sk-test"); err != nil { t.Fatal(err) }
+	if err := store.SaveVoiceAPIKey(ctx, "sk-test"); err != nil {
+		t.Fatal(err)
+	}
 	info, err := os.Stat(filepath.Join(dir, voiceAPIKeyFile))
-	if err != nil || info.Mode().Perm() != 0o600 { t.Fatalf("voice key permissions: %v, %v", info, err) }
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("voice key permissions: %v, %v", info, err)
+	}
 	key, err := New(dir).VoiceAPIKey(ctx)
-	if err != nil || key != "sk-test" { t.Fatalf("saved key: %q, %v", key, err) }
-	if err := store.DeleteVoiceAPIKey(ctx); err != nil { t.Fatal(err) }
+	if err != nil || key != "sk-test" {
+		t.Fatalf("saved key: %q, %v", key, err)
+	}
+	if err := store.DeleteVoiceAPIKey(ctx); err != nil {
+		t.Fatal(err)
+	}
 	key, err = New(dir).VoiceAPIKey(ctx)
-	if err != nil || key != "" { t.Fatalf("removed key: %q, %v", key, err) }
+	if err != nil || key != "" {
+		t.Fatalf("removed key: %q, %v", key, err)
+	}
 }
 
 // The setup token is a bearer credential for the very first claim, so its
