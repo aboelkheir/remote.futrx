@@ -23,14 +23,15 @@ import (
 )
 
 type ProjectHandler struct {
-	projects           *serviceproject.Service
-	users              *serviceuser.Service
-	auth               *serviceauth.Service
-	usage              *UsageHandler
-	apps               *ApplicationsHandler
-	shares             *serviceshare.Service
-	publicHostname     string
-	projectHostPattern *regexp.Regexp
+	projects             *serviceproject.Service
+	users                *serviceuser.Service
+	auth                 *serviceauth.Service
+	usage                *UsageHandler
+	apps                 *ApplicationsHandler
+	shares               *serviceshare.Service
+	publicHostname       string
+	projectHostPattern   *regexp.Regexp
+	legacyIDEHostPattern *regexp.Regexp
 }
 
 // NewProjectHandler builds the handler. apps may be nil, which leaves the
@@ -52,6 +53,9 @@ func NewProjectHandler(
 		publicHostname: publicHostname,
 		projectHostPattern: regexp.MustCompile(
 			`^([a-z0-9][a-z0-9-]*)--(\d{4,5})\.dev\.` + escapedHostname + `$`,
+		),
+		legacyIDEHostPattern: regexp.MustCompile(
+			`^([a-z0-9][a-z0-9-]*)\.code\.` + escapedHostname + `$`,
 		),
 	}
 }
@@ -478,6 +482,20 @@ func (h *ProjectHandler) HandleTLSAsk(w http.ResponseWriter, r *http.Request) {
 	domain := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("domain")))
 	if domain == "" {
 		http.Error(w, "missing domain", http.StatusBadRequest)
+		return
+	}
+	// Keep the original code-server URLs available for existing workspaces.
+	// Only known project slugs may receive on-demand wildcard certificates.
+	if domain == "code."+h.publicHostname {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if mm := h.legacyIDEHostPattern.FindStringSubmatch(domain); mm != nil {
+		if _, err := h.projects.GetBySlug(r.Context(), mm[1]); err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if httptransport.IsApplicationHost(domain, h.publicHostname) {

@@ -21,9 +21,14 @@ site_block() {
     ' "$TEMPLATE"
 }
 
-[ -z "$(site_block 'code.${HOSTNAME}')" ] || fail 'removed shared code hostname block is still present'
+launcher_block="$(site_block 'code.${HOSTNAME}')"
+[ -n "$launcher_block" ] || fail 'shared code hostname block is missing'
+printf '%s\n' "$launcher_block" | grep -Fq 'forward_auth 127.0.0.1:${SERVICE_PORT}' || \
+    fail 'shared code hostname does not require authentication'
+printf '%s\n' "$launcher_block" | grep -Fq 'root * ${INSTALL_DIR}/infra/launcher' || \
+    fail 'shared code hostname does not serve the launcher'
 
-for site in '*.${HOSTNAME}' '*.dev.${HOSTNAME}'; do
+for site in '*.${HOSTNAME}' '*.code.${HOSTNAME}' '*.dev.${HOSTNAME}'; do
     block="$(site_block "$site")"
     [ -n "$block" ] || fail "$site block is missing"
     printf '%s\n' "$block" | grep -Fq 'tls {' || \

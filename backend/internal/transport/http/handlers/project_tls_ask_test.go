@@ -25,13 +25,18 @@ func TestProjectHandlerTLSAskUsesConfiguredPublicHostname(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "removed shared code host",
+			name:       "legacy shared code host",
 			domain:     "code.remote.example.test",
-			wantStatus: http.StatusNotFound,
+			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "removed code host",
+			name:       "legacy project code host",
 			domain:     project.Slug + ".code.remote.example.test",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "unknown legacy code project",
+			domain:     "missing.code.remote.example.test",
 			wantStatus: http.StatusNotFound,
 		},
 		{
