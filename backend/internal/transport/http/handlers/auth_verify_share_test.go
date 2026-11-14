@@ -122,8 +122,8 @@ func TestVerifyRejectsShareAttempts(t *testing.T) {
 			uri:  "/vnc.html?share=good-token", validToken: "good-token",
 		},
 		{
-			name: "IDE host ignores share tokens",
-			host: verifyProjectSlug + ".code." + verifyBaseHost,
+			name: "unrelated host ignores share tokens",
+			host: "other." + verifyBaseHost,
 			uri:  "/?share=good-token", validToken: "good-token",
 		},
 		{
@@ -242,6 +242,10 @@ type shareAuthorizerStub struct {
 	validToken string
 	grant      serviceshare.AuthorizationGrant
 	allows     bool
+}
+
+func (s *shareAuthorizerStub) ShareablePort(port int) error {
+	return serviceshare.ShareablePort(port)
 }
 
 func (s *shareAuthorizerStub) Validate(

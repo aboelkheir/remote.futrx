@@ -45,12 +45,6 @@ func (s *TmuxSocket) WithAccessChecker(access AdminAccessChecker) *TmuxSocket {
 	return s
 }
 
-func (s *TmuxSocket) Handle(upgrader websocket.Upgrader) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		s.handle(upgrader, w, r, r.URL.Query().Get("session"))
-	}
-}
-
 func (s *TmuxSocket) HandleGlobal(upgrader websocket.Upgrader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.handle(upgrader, w, r, globalTerminalSession)
@@ -58,21 +52,22 @@ func (s *TmuxSocket) HandleGlobal(upgrader websocket.Upgrader) http.HandlerFunc 
 }
 
 func (s *TmuxSocket) RegisterRoutes(mux *http.ServeMux, upgrader websocket.Upgrader) {
-	mux.HandleFunc("/ws", s.Handle(upgrader))
 	mux.HandleFunc("/ws/host-terminal", s.HandleGlobal(upgrader))
 }
 
 func (s *TmuxSocket) handle(upgrader websocket.Upgrader, w http.ResponseWriter, r *http.Request, name string) {
-	if s.access != nil {
-		email, isAdmin, err := s.access.CallerAndAdmin(r.Context(), r)
-		if err != nil || email == "" {
-			http.Error(w, "authentication required", http.StatusUnauthorized)
-			return
-		}
-		if !isAdmin {
-			http.Error(w, "administrator access required", http.StatusForbidden)
-			return
-		}
+	if s.access == nil {
+		http.Error(w, "authentication unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	email, isAdmin, err := s.access.CallerAndAdmin(r.Context(), r)
+	if err != nil || email == "" {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	if !isAdmin {
+		http.Error(w, "administrator access required", http.StatusForbidden)
+		return
 	}
 	if !tmuxcli.ValidName(name) {
 		http.Error(w, "invalid session name", http.StatusBadRequest)

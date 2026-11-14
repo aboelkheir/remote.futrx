@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/futrx-com/remote.futrx.com/internal/rbac"
 	servicechat "github.com/futrx-com/remote.futrx.com/internal/service/chat"
 )
 
@@ -38,6 +39,9 @@ func TestStoreListUsesCachedMetadata(t *testing.T) {
 	}
 	if list[0].LastReadAt != 10 {
 		t.Fatalf("legacy chat should start read, got lastReadAt=%d", list[0].LastReadAt)
+	}
+	if list[0].AccountID != "" || list[0].SetupRepair {
+		t.Fatalf("legacy chat gained recovery configuration: %+v", list[0])
 	}
 
 	if _, err := store.Create(context.Background(), servicechat.Meta{ID: "beef", Title: "New", CreatedAt: 2, LastMessageAt: 20}); err != nil {
@@ -85,6 +89,43 @@ func TestStoreListUsesCachedMetadata(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].ID != "abcd" {
 		t.Fatalf("deleted list = %#v", list)
+	}
+}
+
+func TestStorePreservesRecoveryConfigurationAfterReopen(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, meta := range []servicechat.Meta{
+		{ID: "abcd", Provider: servicechat.ProviderCodex, AccountID: "selected-account"},
+		{ID: "beef", Provider: servicechat.ProviderCodex, AccountID: "selected-account", SetupRepair: true},
+	} {
+		if _, err := store.Create(ctx, meta); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.AppendEvent(ctx, meta.ID, servicechat.Event{Type: "user", Text: "repair setup"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	for _, id := range []servicechat.ID{"abcd", "beef"} {
+		meta, err := reopened.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if meta.AccountID != "selected-account" || meta.SetupRepair != (id == "beef") {
+			t.Fatalf("reopened chat lost recovery configuration: %+v", meta)
+		}
 	}
 }
 
@@ -438,5 +479,50 @@ func TestStorePersistsAgentSelectionsAcrossInstances(t *testing.T) {
 		loaded.ServiceTier != "fast" ||
 		loaded.ProjectID != "project-1" {
 		t.Fatalf("reloaded selections = %#v", loaded)
+	}
+}
+
+func TestPromptAuthorsSurviveReopenAndFork(t *testing.T) {
+	ctx := rbac.ContextWithSystemActor(context.Background())
+	root := t.TempDir()
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.Create(ctx, servicechat.Meta{ID: "abcd", Provider: servicechat.ProviderClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authors := []string{"alice@example.com", "bob@example.com"}
+	for i, author := range authors {
+		if _, err := store.AppendEvent(ctx, meta.ID, servicechat.Event{T: int64(i + 1), Type: "user", Text: "hello", UserEmail: author}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	forked, err := servicechat.New(reopened, nil, nil, nil).Fork(ctx, meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []servicechat.ID{meta.ID, forked.ID} {
+		events, err := reopened.ReadEvents(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(events) != len(authors) {
+			t.Fatalf("chat %s lost messages", id)
+		}
+		for i, event := range events {
+			if event.UserEmail != authors[i] {
+				t.Fatalf("chat %s lost author: %#v", id, event)
+			}
+		}
 	}
 }

@@ -134,14 +134,12 @@ func (s *fileSynchronizer) pushIfNewer(ctx context.Context, file provisioning.Cr
 			return err
 		}
 		if !file.Validator.Valid(data) {
-			// A host CLI can clear its credentials too. Never overwrite a
-			// project's working login with a newer but unusable host file.
 			return nil
 		}
 	}
 
 	shouldPush := true
-	if !file.PushOnly {
+	if !file.HostAuthoritative && !file.PushOnly {
 		if out, err := s.runner.Run(ctx, "exec", containerName, "--", "stat", "-c", "%Y", file.ContainerPath); err == nil {
 			if containerUnix, parseErr := strconv.ParseInt(strings.TrimSpace(out), 10, 64); parseErr == nil {
 				shouldPush = hostInfo.ModTime().Unix() > containerUnix
@@ -151,7 +149,6 @@ func (s *fileSynchronizer) pushIfNewer(ctx context.Context, file provisioning.Cr
 	if !shouldPush && file.Validator != nil {
 		data, err := s.runner.Run(ctx, "exec", containerName, "--", "cat", file.ContainerPath)
 		if err != nil {
-			// Do not include command output: it may contain credential data.
 			return fmt.Errorf("read container credentials %s: %w", file.ContainerPath, err)
 		}
 		shouldPush = !file.Validator.Valid([]byte(data))
@@ -171,8 +168,6 @@ func (s *fileSynchronizer) pushIfNewer(ctx context.Context, file provisioning.Cr
 }
 
 func (s *fileSynchronizer) pullValidatedFile(ctx context.Context, file provisioning.CredentialFile, containerName string) error {
-	// Stage privately beside the destination so a partial pull or cleared
-	// credential document cannot destroy the canonical host login.
 	temporary, err := os.CreateTemp(filepath.Dir(file.HostPath), ".credential-*")
 	if err != nil {
 		return fmt.Errorf("stage credentials: %w", err)

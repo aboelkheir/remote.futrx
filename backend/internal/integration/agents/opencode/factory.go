@@ -26,11 +26,12 @@ func NewFactory() (agentmodule.Factory, error) {
 			CredentialLabel: "TokenRouter API key",
 		},
 		Features: agentmodule.Features{
-			Sessions: agentmodule.SessionSupport{Resume: true, Fork: true},
-			Skills:   agentmodule.SkillsInstructions,
+			Sessions:              agentmodule.SessionSupport{Resume: true, Fork: true},
+			Skills:                agentmodule.SkillsInstructions,
+			StreamingPresentation: agentmodule.StreamingBlocks,
 		},
 	}, &profile, func(deps agentmodule.Dependencies, validated *provisioning.Profile) (agentmodule.Components, error) {
-		apiKeys, err := agentauth.NewAPIKeyService(context.Background(), agent.ProviderOpenCode, deps.APIKeys, nil)
+		apiKeys, err := agentauth.NewAPIKeyService(context.Background(), agent.ProviderOpenCode, deps.APIKeys, nil, deps.AccountAuthorizer)
 		if err != nil {
 			return agentmodule.Components{}, err
 		}

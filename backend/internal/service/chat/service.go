@@ -2,15 +2,23 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/futrx-com/remote.futrx.com/internal/agent"
+	permission "github.com/futrx-com/remote.futrx.com/internal/rbac"
 	agentmodule "github.com/futrx-com/remote.futrx.com/internal/service/agent/module"
+	"github.com/futrx-com/remote.futrx.com/internal/service/audit"
 )
 
 type Service struct {
+	accountAccess        AccountAccess
+	selectionMu          sync.Mutex
+	authorizer           Authorizer
+	audit                audit.Recorder
 	repo                 Repository
 	transcriptEvents     TranscriptEventSource
 	transcriptWindow     TranscriptEventWindowSource
@@ -61,6 +69,12 @@ func WithProviderPolicy(policy ProviderPolicy) Option {
 	}
 }
 
+// WithAudit records chat creation and deletion. Deleting a chat destroys its
+// event log, so it belongs in the trail even though chats hold no secrets.
+func WithAudit(recorder audit.Recorder) Option {
+	return func(s *Service) { s.audit = audit.RecorderOrNop(recorder) }
+}
+
 func New(
 	repo Repository,
 	projects ProjectResolver,
@@ -69,15 +83,31 @@ func New(
 	options ...Option,
 ) *Service {
 	service := &Service{
-		repo:     repo,
-		projects: projects,
-		tmux:     tmux,
-		runs:     runs,
+		repo:       repo,
+		authorizer: permission.SystemOnlyAuthorizer{},
+		projects:   projects,
+		tmux:       tmux,
+		runs:       runs,
+		audit:      audit.Nop{},
 	}
 	for _, option := range options {
-		option(service)
+		if option != nil {
+			option(service)
+		}
 	}
 	return service
+}
+
+func (s *Service) recordChat(ctx context.Context, action string, meta Meta, id ID, err error) {
+	if s == nil || s.audit == nil {
+		return
+	}
+	target := audit.Target{Type: audit.TargetChat, ID: string(id), Name: meta.Title}
+	entryMeta := audit.Meta{}
+	if meta.ProjectID != "" {
+		entryMeta["projectId"] = string(meta.ProjectID)
+	}
+	s.audit.Record(ctx, audit.Result(action, target, entryMeta, err))
 }
 
 func (s *Service) List(ctx context.Context) ([]Meta, error) {
@@ -103,6 +133,15 @@ func (s *Service) Get(ctx context.Context, id ID) (Meta, error) {
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (Meta, error) {
+	if err := s.requireCreate(ctx, in.ProjectID); err != nil {
+		return Meta{}, err
+	}
+	meta, err := s.create(ctx, in)
+	s.recordChat(ctx, audit.ActionChatCreate, meta, meta.ID, err)
+	return meta, err
+}
+
+func (s *Service) create(ctx context.Context, in CreateInput) (Meta, error) {
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		title = "New chat"
@@ -117,6 +156,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Meta, error) {
 		return Meta{}, ErrInvalidProvider
 	}
 
+	if err := s.requireAccount(ctx, provider, in.AccountID); err != nil {
+		return Meta{}, err
+	}
 	cwd := strings.TrimSpace(in.Cwd)
 	if cwd == "" && in.ProjectID != "" && s.projects != nil {
 		projectCwd, err := s.projects.WorkspaceForProject(ctx, in.ProjectID)
@@ -138,6 +180,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Meta, error) {
 	meta, err := s.repo.Create(ctx, Meta{
 		Title:           title,
 		Provider:        provider,
+		AccountID:       strings.TrimSpace(in.AccountID),
 		TmuxSession:     in.TmuxSession,
 		Cwd:             cwd,
 		Model:           in.Model,
@@ -167,6 +210,12 @@ func (s *Service) Fork(ctx context.Context, id ID) (Meta, error) {
 	if err != nil {
 		return Meta{}, err
 	}
+	if err := s.requireCreate(ctx, src.ProjectID); err != nil {
+		return Meta{}, err
+	}
+	if err := s.requireAccount(ctx, src.Provider, src.AccountID); err != nil {
+		return Meta{}, err
+	}
 	if !s.validProviderScope(src.Provider, src.ProjectID) {
 		return Meta{}, ErrInvalidProvider
 	}
@@ -192,6 +241,7 @@ func (s *Service) Fork(ctx context.Context, id ID) (Meta, error) {
 	forkMeta := Meta{
 		Title:           title + " (fork)",
 		Provider:        src.Provider,
+		AccountID:       src.AccountID,
 		Sessions:        sessions,
 		Cwd:             src.Cwd,
 		Model:           src.Model,
@@ -230,6 +280,10 @@ func (s *Service) appendCopiedEvent(ctx context.Context, id ID, event Event) (Ev
 }
 
 func (s *Service) Update(ctx context.Context, id ID, in UpdateInput) (Meta, error) {
+	// Serialize selections so the authorization preflight and update see the
+	// same provider/account pair. Run-side credential checks remain independent.
+	s.selectionMu.Lock()
+	defer s.selectionMu.Unlock()
 	if !ValidID(id) {
 		return Meta{}, ErrInvalidID
 	}
@@ -247,6 +301,24 @@ func (s *Service) Update(ctx context.Context, id ID, in UpdateInput) (Meta, erro
 		}
 	}
 
+	if in.Provider != nil || in.AccountID != nil {
+		current, err := s.repo.Get(ctx, id)
+		if err != nil {
+			return Meta{}, err
+		}
+		selectedProvider, selectedID := current.Provider, current.AccountID
+		if in.Provider != nil && nextProvider != current.Provider {
+			selectedProvider = nextProvider
+			selectedID = ""
+		}
+		if in.AccountID != nil {
+			selectedID = strings.TrimSpace(*in.AccountID)
+		}
+		if err := s.requireAccount(ctx, selectedProvider, selectedID); err != nil {
+			return Meta{}, err
+		}
+	}
+
 	meta, err := s.repo.Update(ctx, id, func(m *Meta) {
 		if in.Title != nil {
 			m.Title = strings.TrimSpace(*in.Title)
@@ -257,8 +329,21 @@ func (s *Service) Update(ctx context.Context, id ID, in UpdateInput) (Meta, erro
 		if in.Provider != nil {
 			if nextProvider != m.Provider {
 				m.SelectedSkills = nil
+				m.AccountID = ""
 			}
 			m.Provider = nextProvider
+		}
+		if in.AccountID != nil {
+			nextAccountID := strings.TrimSpace(*in.AccountID)
+			if nextAccountID != m.AccountID {
+				// Provider sessions can be account-bound. Keep the visible chat
+				// history, but start a fresh provider session after any account
+				// selection change, including pinning an account after using the
+				// provider default implicitly.
+				m.SetSessionID(m.Provider, "")
+				m.ForkPending = false
+			}
+			m.AccountID = nextAccountID
 		}
 		if in.Model != nil {
 			m.Model = *in.Model
@@ -358,6 +443,13 @@ func (s *Service) withRunning(meta Meta) Meta {
 }
 
 func (s *Service) Delete(ctx context.Context, id ID) error {
+	existing, _ := s.repo.Get(ctx, id)
+	err := s.delete(ctx, id)
+	s.recordChat(ctx, audit.ActionChatDelete, existing, id, err)
+	return err
+}
+
+func (s *Service) delete(ctx context.Context, id ID) error {
 	if !ValidID(id) {
 		return ErrInvalidID
 	}
@@ -413,7 +505,18 @@ func (s *Service) UploadTarget(ctx context.Context, id ID) (string, error) {
 	// subdir isolates attachments from the source tree.
 	root := meta.Cwd
 	if meta.ProjectID != "" && s.projects != nil {
-		if ws, err := s.projects.WorkspaceForProject(ctx, meta.ProjectID); err == nil && ws != "" {
+		ws, err := s.projects.WorkspaceForProject(ctx, meta.ProjectID)
+		// A deleted project is not a failure to look one up: the chat and its
+		// transcript outlive the project, and it can still take an attachment
+		// into the directory it was working in. Every other error means the
+		// workspace exists but could not be resolved, and uploading into the
+		// chat's own cwd instead would put the file somewhere the caller is not
+		// expecting it.
+		switch {
+		case errors.Is(err, ErrProjectNotFound):
+		case err != nil:
+			return "", err
+		case ws != "":
 			root = ws
 		}
 	}

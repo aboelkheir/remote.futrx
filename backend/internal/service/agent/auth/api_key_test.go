@@ -51,7 +51,7 @@ func (s *apiKeyTestStore) DeleteAgentAPIKey(_ context.Context, id agent.Provider
 
 func TestAPIKeyServiceLoadsMutatesAndPublishesOnlyStatus(t *testing.T) {
 	store := &apiKeyTestStore{keys: map[agent.ProviderID]string{agent.ProviderMiniMax: "stored-key"}}
-	service, err := NewAPIKeyService(context.Background(), agent.ProviderMiniMax, store, nil)
+	service, err := NewAPIKeyService(context.Background(), agent.ProviderMiniMax, store, nil, allowAccountUse{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,6 +93,7 @@ func TestAPIKeyServiceDoesNotActivateAStoredUnsupportedCredentialClass(t *testin
 		agent.ProviderMiniMax,
 		store,
 		rejectingStoredKeyValidator{},
+		allowAccountUse{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -108,8 +109,69 @@ func TestAPIKeyServiceDoesNotActivateAStoredUnsupportedCredentialClass(t *testin
 	}
 }
 
+func TestAPIKeyServiceMigratesAndSelectsNamedAccounts(t *testing.T) {
+	ctx := context.Background()
+	legacy := &apiKeyTestStore{keys: map[agent.ProviderID]string{agent.ProviderMiniMax: "legacy-key"}}
+	accounts := &fakeAccountStore{sets: map[agent.ProviderID]AccountSet{agent.ProviderMiniMax: {}}}
+	service, err := NewAPIKeyService(ctx, agent.ProviderMiniMax, legacy, nil, allowAccountUse{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.EnableAccounts(ctx, NewAccountVault(accounts, allowAccountUse{}), "MiniMax"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := service.AccountsSnapshot()
+	if len(snapshot.Items) != 1 || snapshot.Items[0].Label != "Default" || !snapshot.Items[0].Active {
+		t.Fatalf("migrated accounts = %#v", snapshot)
+	}
+	defaultID := snapshot.ActiveAccountID
+	if key, ok := service.APIKeyFor(defaultID); !ok || key != "legacy-key" {
+		t.Fatalf("migrated key = (%q, %t)", key, ok)
+	}
+	if _, remains := legacy.keys[agent.ProviderMiniMax]; remains {
+		t.Fatal("legacy key remains after successful migration")
+	}
+	binding := NewAPIKeyBinding(agent.ProviderMiniMax, service)
+	if !binding.AccountsAvailable() || binding.Snapshot().Accounts == nil {
+		t.Fatalf("named API-key accounts were not attached to the auth binding: %#v", binding.Snapshot())
+	}
+
+	if err := service.SetAccount(ctx, "Work", "", "work-key"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot = service.AccountsSnapshot()
+	if len(snapshot.Items) != 2 || snapshot.ActiveAccountID == defaultID {
+		t.Fatalf("named accounts after add = %#v", snapshot)
+	}
+	workID := snapshot.ActiveAccountID
+	if key, ok := service.APIKeyFor(workID); !ok || key != "work-key" {
+		t.Fatalf("work key = (%q, %t)", key, ok)
+	}
+	if err := service.ActivateAccount(ctx, defaultID); err != nil {
+		t.Fatal(err)
+	}
+	if key, ok := service.APIKey(); !ok || key != "legacy-key" {
+		t.Fatalf("active key after switch = (%q, %t)", key, ok)
+	}
+	if err := service.Set(ctx, "rotated-key"); err != nil {
+		t.Fatal(err)
+	}
+	if key, ok := service.APIKey(); !ok || key != "rotated-key" {
+		t.Fatalf("active key after compatible replace = (%q, %t)", key, ok)
+	}
+	if got := service.AccountsSnapshot().Items[0].Label; got != "Default" {
+		t.Fatalf("compatible replace renamed active account to %q", got)
+	}
+	if err := service.DeleteAccount(ctx, workID); err != nil {
+		t.Fatal(err)
+	}
+	if len(service.AccountsSnapshot().Items) != 1 {
+		t.Fatalf("accounts after delete = %#v", service.AccountsSnapshot())
+	}
+}
+
 func TestAPIKeyServiceRejectsBlankAndUnavailableStorage(t *testing.T) {
-	service, err := NewAPIKeyService(context.Background(), agent.ProviderMiniMax, nil, nil)
+	service, err := NewAPIKeyService(context.Background(), agent.ProviderMiniMax, nil, nil, allowAccountUse{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +200,7 @@ func TestAPIKeyServiceValidatesBeforeReplacingStoredKey(t *testing.T) {
 			validatedKey = key
 			return validationErr
 		}),
+		allowAccountUse{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +244,7 @@ func TestNewAPIKeyServiceReturnsStorageErrors(t *testing.T) {
 	_, err := NewAPIKeyService(context.Background(), agent.ProviderMiniMax, &apiKeyTestStore{
 		keys: map[agent.ProviderID]string{},
 		err:  want,
-	}, nil)
+	}, nil, allowAccountUse{})
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v, want %v", err, want)
 	}

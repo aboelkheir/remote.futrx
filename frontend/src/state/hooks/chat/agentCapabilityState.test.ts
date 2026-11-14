@@ -13,7 +13,7 @@ const catalog: AgentCapabilitiesCatalog = {
       sessions: { resume: true, fork: true },
       skills: "dollar-mention",
       browserTools: true,
-      scheduledTools: true,
+      applicationTools: true,
       executionPolicies: true,
     },
     modes: [{ value: "default", label: "Default" }, { value: "plan", label: "Plan" }],
@@ -121,7 +121,7 @@ test("keeps a managed API-key provider locked until its credential exists", () =
           sessions: { resume: true, fork: true },
           skills: "dollar-mention",
           browserTools: true,
-          scheduledTools: true,
+          applicationTools: true,
           executionPolicies: true,
         },
         models: [{

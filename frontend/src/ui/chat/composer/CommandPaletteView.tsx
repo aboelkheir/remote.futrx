@@ -2,12 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { RegisteredSkill } from "../../../models/skill";
 import { Code } from "../../primitives/icons";
 
-const MAX_VISIBLE = 8;
+const PALETTE_MAX_HEIGHT = 360;
+const PALETTE_GAP = 8;
 
 interface PalettePosition {
   left: number;
-  top: number;
+  bottom: number;
   width: number;
+  maxHeight: number;
 }
 
 export function CommandPaletteView({
@@ -41,6 +43,8 @@ export function CommandPaletteView({
 
   // Pin to the viewport and keep it above the composer card, mirroring SkillPicker
   // (the thread column has overflow-hidden, so absolute positioning would clip).
+  // The bottom edge is anchored to the card's top so the palette grows upward,
+  // away from the text being typed, rather than down over it and off-screen.
   useLayoutEffect(() => {
     function place() {
       const card = document.querySelector<HTMLElement>(".codex-composer-card");
@@ -48,26 +52,39 @@ export function CommandPaletteView({
       const bounds = card.getBoundingClientRect();
       setPosition({
         left: bounds.left,
-        top: bounds.top,
+        bottom: window.innerHeight - bounds.top + PALETTE_GAP,
         width: bounds.width,
+        // Never taller than the space above the card: on a short viewport a
+        // floor here would push the header off the top of the screen, while a
+        // shorter palette still scrolls.
+        maxHeight: Math.max(0, Math.min(PALETTE_MAX_HEIGHT, bounds.top - PALETTE_GAP * 2)),
       });
     }
     place();
     window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
+    // The card grows as a prompt wraps onto more lines, which moves its top edge.
+    const card = document.querySelector<HTMLElement>(".codex-composer-card");
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    if (card) observer?.observe(card);
+    return () => {
+      window.removeEventListener("resize", place);
+      observer?.disconnect();
+    };
   }, []);
 
   const left = position?.left ?? 0;
-  const top = position?.top ?? 0;
+  const bottom = position?.bottom ?? 0;
   const width = position?.width ?? 380;
+  const maxHeight = position?.maxHeight ?? PALETTE_MAX_HEIGHT;
 
   return (
     <div
       class="theme-menu-surface codex-command-palette fixed z-40 flex flex-col overflow-hidden rounded-lg border border-line bg-raised shadow-2xl"
       style={{
         left: `${left}px`,
-        top: `${top}px`,
+        bottom: `${bottom}px`,
         width: `${width}px`,
+        maxHeight: `${maxHeight}px`,
         visibility: position ? "visible" : "hidden",
       }}
       role="listbox"
@@ -84,7 +101,7 @@ export function CommandPaletteView({
         </span>
       </div>
 
-      <div ref={listRef} class="min-h-0 max-h-80 flex-1 overflow-y-auto py-1">
+      <div ref={listRef} class="min-h-0 flex-1 overflow-y-auto py-1">
         {error ? (
           <div class="px-3 py-3 text-[12px] text-accent-red">{error}</div>
         ) : loading ? (
@@ -94,7 +111,7 @@ export function CommandPaletteView({
             {registeredCount === 0 ? "No commands registered" : "No matching commands"}
           </div>
         ) : (
-          items.slice(0, MAX_VISIBLE).map((skill, index) => (
+          items.map((skill, index) => (
             <button
               key={`${skill.source || "skill"}:${skill.command || skill.name}`}
               type="button"

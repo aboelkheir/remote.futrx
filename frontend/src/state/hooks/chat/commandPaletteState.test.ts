@@ -53,6 +53,15 @@ test("filter falls back to a broad description search", () => {
   assert.equal(result[0].name, "Refactor");
 });
 
+test("filter matches words across a hyphenated command", () => {
+  const result = commandPaletteState.filter(
+    [...skills, { name: "ui-ux-pro-max", command: "/ui-ux-pro-max", provider: "claude" }],
+    "ui ux"
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].name, "ui-ux-pro-max");
+});
+
 test("filter is case-insensitive", () => {
   const result = commandPaletteState.filter(skills, "BUILD");
   assert.equal(result.length, 1);

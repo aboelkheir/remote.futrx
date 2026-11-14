@@ -1,5 +1,7 @@
+import type { ProjectMeta } from "../../models/project";
 import type { AppearanceTheme } from "../../models/settings";
 import type { UserDirectory } from "../../state/hooks/users/useUserDirectory";
+import type { AuditLog } from "../../state/hooks/admin/useAuditLog";
 import type { ServerInfo } from "../../models/serverInfo";
 import type { SelfUpdateStatus } from "../../models/selfUpdate";
 import type { SecuritySettingsController } from "../../state/hooks/auth/useSecuritySettings";
@@ -12,41 +14,44 @@ import {
   ChevronLeft,
   Download,
   Info,
+  Mail,
   Menu,
   Monitor,
   ShieldCheck,
-  Terminal,
+  Server,
   Users,
 } from "../primitives/icons";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { NotificationSettings } from "./NotificationSettings";
 import { AgentAuthSettingsList } from "./AgentAuthSettings";
-import { GoogleOAuthSettings } from "./GoogleOAuthSettings";
 import { VoiceTranscriptionSettings } from "./VoiceTranscriptionSettings";
+import { HostTerminalSettings } from "./HostTerminalSettings";
+import { EmailSettings } from "./email/EmailSettings";
+import { AuditLogSettings } from "./AuditLogSettings";
+import { GoogleOAuthSettings } from "./GoogleOAuthSettings";
+import { PermissionsSettings } from "./PermissionsSettings";
 import { SecuritySettings } from "./SecuritySettings";
 import { ServerInfoSettings } from "./ServerInfoSettings";
 import { UpdatesSettings } from "./UpdatesSettings";
 import { UsageSettings } from "./UsageSettings";
-import { HostTerminalSettings } from "./HostTerminalSettings";
 import { UsersPanel } from "../account/UsersPanel";
+import { PLATFORM_SCOPE } from "../../config/constants/user-roles";
 import type { UsageDashboard } from "../../state/hooks/usage/useUsageDashboard";
+import { ApplicationsSection } from "../applications/ApplicationsSection";
+import type { ApplicationsController } from "../../state/hooks/applications/useApplications";
+import type { PermissionsController } from "../../state/hooks/permissions/usePermissionAdministration";
 
-export type SettingsTab =
-  | "appearance"
-  | "notifications"
-  | "agents"
-  | "users"
-  | "security"
-  | "updates"
-  | "terminal"
-  | "info"
-  | "usage";
+import type { SettingsTab } from "../../models/workspace";
+import type { ReleaseNotesController } from "../../state/hooks/server/useReleaseNotes";
+export type { SettingsTab } from "../../models/workspace";
 
 const tabs: Array<{
   id: SettingsTab;
   label: string;
   description: string;
   Icon: ComponentType<{ class?: string }>;
+  // Hidden from non-admins instead of showing a notice.
+  adminOnly?: boolean;
 }> = [
   {
     id: "appearance",
@@ -67,10 +72,25 @@ const tabs: Array<{
     Icon: Bot,
   },
   {
+    id: "voice",
+    label: "Voice transcription",
+    description: "Configure the OpenAI API key used for dictation.",
+    Icon: Activity,
+    adminOnly: true,
+  },
+  {
+    id: "host-terminal",
+    label: "Host terminal",
+    description: "Open the persistent shell on the Remote server.",
+    Icon: Server,
+    adminOnly: true,
+  },
+  {
     id: "usage",
     label: "Usage",
-    description: "Track tokens and estimated cost per project, user, provider, and model.",
+    description: "Track token usage per project, user, provider, and model.",
     Icon: Activity,
+    adminOnly: true,
   },
   {
     id: "users",
@@ -79,10 +99,28 @@ const tabs: Array<{
     Icon: Users,
   },
   {
+    id: "permissions",
+    label: "Permissions",
+    description: "Roles, assignments, and bindings.",
+    Icon: ShieldCheck,
+  },
+  {
+    id: "audit",
+    label: "Audit log",
+    description: "Review who did what on this server.",
+    Icon: Activity,
+  },
+  {
     id: "security",
     label: "Security",
     description: "Manage two-factor authentication, sessions, and sign-in history.",
     Icon: ShieldCheck,
+  },
+  {
+    id: "applications",
+    label: "Applications",
+    description: "Install databases and services that run globally on this server.",
+    Icon: Server,
   },
   {
     id: "updates",
@@ -91,21 +129,21 @@ const tabs: Array<{
     Icon: Download,
   },
   {
-    id: "terminal",
-    label: "Terminal",
-    description: "Open an administrator shell on the host server.",
-    Icon: Terminal,
-  },
-  {
     id: "info",
     label: "Info",
     description: "View details about the main parent server.",
     Icon: Info,
   },
+  {
+    id: "email",
+    label: "Email",
+    description: "Send mail from this server through SMTP.",
+    Icon: Mail,
+  },
 ];
 
 export function SettingsPage({
-  activeTab,
+  activeTab: requestedTab,
   currentEmail,
   isAdmin,
   googleOAuthEnabled,
@@ -114,12 +152,14 @@ export function SettingsPage({
   serverInfoRefreshing,
   serverInfoError,
   selfUpdate,
+  releaseNotes,
   selfUpdateLoading,
   selfUpdateChecking,
   selfUpdateApplying,
   selfUpdateRestarting,
   selfUpdateError,
   userDirectory,
+  auditLog,
   usageDashboard,
   usageRebuilding,
   usageRebuildMessage,
@@ -137,6 +177,9 @@ export function SettingsPage({
   onCheckForUpdates,
   onApplyUpdate,
   onAppearanceThemeChange,
+  applications,
+  permissions,
+  projects,
 }: {
   activeTab: SettingsTab;
   currentEmail: string;
@@ -147,12 +190,14 @@ export function SettingsPage({
   serverInfoRefreshing: boolean;
   serverInfoError: string | null;
   selfUpdate: SelfUpdateStatus | null;
+  releaseNotes: ReleaseNotesController;
   selfUpdateLoading: boolean;
   selfUpdateChecking: boolean;
   selfUpdateApplying: boolean;
   selfUpdateRestarting: boolean;
   selfUpdateError: string | null;
   userDirectory: UserDirectory;
+  auditLog: AuditLog;
   usageDashboard: UsageDashboard;
   usageRebuilding: boolean;
   usageRebuildMessage: string | null;
@@ -170,7 +215,14 @@ export function SettingsPage({
   onCheckForUpdates: () => Promise<void>;
   onApplyUpdate: (tag?: string) => Promise<void>;
   onAppearanceThemeChange: (theme: AppearanceTheme) => void;
+  applications: ApplicationsController;
+  permissions: PermissionsController;
+  projects: ProjectMeta[];
 }) {
+  // A non-admin who opens an admin-only tab by URL lands on the first tab.
+  const activeTab = tabs.some((tab) => tab.id === requestedTab && tab.adminOnly && !isAdmin)
+    ? tabs[0].id
+    : requestedTab;
   const activeTabDetails = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
 
   return (
@@ -201,11 +253,13 @@ export function SettingsPage({
       <div class="flex-1 min-h-0 flex flex-col md:flex-row overflow-hidden">
         <SettingsNavigation
           activeTab={activeTab}
+          isAdmin={isAdmin}
           onTabChange={onTabChange}
           className="theme-submenu-surface hidden md:flex w-56 flex-none border-r border-line bg-inset p-3"
         />
         <SettingsNavigation
           activeTab={activeTab}
+          isAdmin={isAdmin}
           onTabChange={onTabChange}
           mobile
           className="theme-submenu-surface md:hidden flex-none border-b border-line bg-inset px-3 py-2 overflow-x-auto no-scrollbar"
@@ -238,18 +292,15 @@ export function SettingsPage({
 
             {activeTab === "agents" && (
               isAdmin ? (
-                <div class="space-y-4">
-                  <VoiceTranscriptionSettings />
-                  <div class="rounded-card border border-line bg-surface overflow-hidden">
-                    <div class="px-4 py-3 border-b border-line">
-                      <div class="text-[14.5px] font-semibold text-ink-50">Agent authentication</div>
-                      <div class="text-[12.5px] text-ink-300 mt-0.5 leading-snug">
-                        Configure each agent using its declared host-managed, project-external, or no-auth flow.
-                      </div>
+                <div class="rounded-card border border-line bg-surface overflow-hidden">
+                  <div class="px-4 py-3 border-b border-line">
+                    <div class="text-[14.5px] font-semibold text-ink-50">Agent authentication</div>
+                    <div class="text-[12.5px] text-ink-300 mt-0.5 leading-snug">
+                      Configure each agent using its declared host-managed, project-external, or no-auth flow.
                     </div>
-                    <div class="p-3 space-y-3">
-                      <AgentAuthSettingsList />
-                    </div>
+                  </div>
+                  <div class="p-3 space-y-3">
+                    <AgentAuthSettingsList />
                   </div>
                 </div>
               ) : (
@@ -282,15 +333,65 @@ export function SettingsPage({
                   onAdd={userDirectory.add}
                   onRemove={userDirectory.remove}
                   onSetRole={userDirectory.setRole}
+                  customRoles={permissions.roles}
+                  bindings={permissions.bindings}
+                  onBindRole={(userEmail, roleId) =>
+                    permissions.addBinding({ roleId, userEmail, scope: PLATFORM_SCOPE })
+                  }
+                  onUnbindRole={(userEmail, roleId) =>
+                    permissions.removeBinding({ roleId, userEmail, scope: PLATFORM_SCOPE })
+                  }
                 />
               </div>
             )}
 
+            {activeTab === "audit" &&
+              (isAdmin ? (
+                <AuditLogSettings
+                  entries={auditLog.entries}
+                  filters={auditLog.filters}
+                  loading={auditLog.loading}
+                  loadingMore={auditLog.loadingMore}
+                  hasMore={auditLog.hasMore}
+                  error={auditLog.error}
+                  exportUrl={auditLog.exportUrl}
+                  onFiltersChange={auditLog.setFilters}
+                  onRefresh={auditLog.refresh}
+                  onLoadMore={auditLog.loadMore}
+                />
+              ) : (
+                <SettingsNotice>
+                  The audit log is visible to server administrators only.
+                </SettingsNotice>
+              ))}
+
             {activeTab === "security" && <SecuritySettings controller={security} />}
+
+            {activeTab === "permissions" &&
+              (isAdmin ? (
+                <PermissionsSettings permissions={permissions} projects={projects} />
+              ) : (
+                <SettingsNotice>
+                  Permissions are managed by server administrators.
+                </SettingsNotice>
+              ))}
+
+            {activeTab === "voice" && isAdmin && <VoiceTranscriptionSettings />}
+            {activeTab === "host-terminal" && isAdmin && <HostTerminalSettings />}
+
+            {activeTab === "applications" &&
+              (isAdmin ? (
+                <ApplicationsSection controller={applications} />
+              ) : (
+                <SettingsNotice>
+                  Global applications are managed by server administrators.
+                </SettingsNotice>
+              ))}
 
             {activeTab === "updates" &&
               (isAdmin ? (
                 <UpdatesSettings
+                  releaseNotes={releaseNotes}
                   status={selfUpdate}
                   loading={selfUpdateLoading}
                   checking={selfUpdateChecking}
@@ -306,14 +407,6 @@ export function SettingsPage({
                 </SettingsNotice>
               ))}
 
-            {activeTab === "terminal" &&
-              (isAdmin ? (
-                <HostTerminalSettings />
-              ) : (
-                <SettingsNotice>
-                  The global terminal is restricted to server administrators.
-                </SettingsNotice>
-              ))}
 
             {activeTab === "info" && (
               <ServerInfoSettings
@@ -326,6 +419,15 @@ export function SettingsPage({
                 onRefresh={onRefreshServerInfo}
               />
             )}
+            {activeTab === "email" && (
+              isAdmin ? (
+                <EmailSettings defaultRecipient={currentEmail} />
+              ) : (
+                <SettingsNotice>
+                  Email delivery is managed by server administrators.
+                </SettingsNotice>
+              )
+            )}
           </div>
         </main>
       </div>
@@ -335,11 +437,13 @@ export function SettingsPage({
 
 function SettingsNavigation({
   activeTab,
+  isAdmin,
   onTabChange,
   mobile = false,
   className,
 }: {
   activeTab: SettingsTab;
+  isAdmin: boolean;
   onTabChange: (tab: SettingsTab) => void;
   mobile?: boolean;
   className: string;
@@ -351,7 +455,7 @@ function SettingsNavigation({
         role="tablist"
         aria-orientation={mobile ? "horizontal" : "vertical"}
       >
-        {tabs.map(({ id, label, Icon }) => {
+        {tabs.filter((tab) => isAdmin || !tab.adminOnly).map(({ id, label, Icon }) => {
           const active = id === activeTab;
           return (
             <button

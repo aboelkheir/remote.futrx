@@ -17,7 +17,9 @@ export interface ToolCallProps {
   outputBytes?: number;
   outputTruncated?: boolean;
   outputExpanded?: boolean;
+  onOpen?: () => void;
+  loadingResponse?: boolean;
   isError?: boolean;
   status: "running" | "done";
-  onAnswerQuestion?: (text: string) => void;
+  onAnswerQuestion?: (text: string) => boolean;
 }

@@ -95,19 +95,17 @@ func TestGlobalTerminalUsesPersistentFixedSession(t *testing.T) {
 	}
 }
 
-func TestLegacyHostTerminalAlsoRequiresAdministrator(t *testing.T) {
+func TestGlobalTerminalFailsClosedWithoutAccessChecker(t *testing.T) {
 	client := &tmuxClientStub{}
-	socket := NewTmuxSocket(client).WithAccessChecker(tmuxAccessStub{
-		email: "member@example.com",
-	})
+	socket := NewTmuxSocket(client)
 
 	response := httptest.NewRecorder()
-	socket.Handle(websocket.Upgrader{}).ServeHTTP(
+	socket.HandleGlobal(websocket.Upgrader{}).ServeHTTP(
 		response,
-		httptest.NewRequest(http.MethodGet, "/ws?session=existing", nil),
+		httptest.NewRequest(http.MethodGet, "/ws/host-terminal", nil),
 	)
 
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
 }

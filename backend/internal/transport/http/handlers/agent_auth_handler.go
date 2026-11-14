@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/futrx-com/remote.futrx.com/internal/rbac"
+	agentaccountaccess "github.com/futrx-com/remote.futrx.com/internal/service/agent/accountaccess"
 	agentauth "github.com/futrx-com/remote.futrx.com/internal/service/agent/auth"
 	agentmodule "github.com/futrx-com/remote.futrx.com/internal/service/agent/module"
+	serviceaudit "github.com/futrx-com/remote.futrx.com/internal/service/audit"
 	serviceauth "github.com/futrx-com/remote.futrx.com/internal/service/auth"
 	httptransport "github.com/futrx-com/remote.futrx.com/internal/transport/http"
 )
@@ -16,9 +19,11 @@ import (
 // agent module catalog. Provider packages configure those flows; HTTP owns only
 // route, access-control, and response policy.
 type AgentAuthHandler struct {
-	bindings []agentauth.Binding
-	modules  agentModuleDescriptors
-	auth     *serviceauth.Service
+	accountAccess *agentaccountaccess.Service
+	bindings      []agentauth.Binding
+	modules       agentModuleDescriptors
+	auth          *serviceauth.Service
+	audit         serviceaudit.Recorder
 }
 
 type agentModuleDescriptors interface {
@@ -40,13 +45,42 @@ func NewAgentAuthHandler(
 	return handler
 }
 
+func (h *AgentAuthHandler) WithAccountAccess(access *agentaccountaccess.Service) *AgentAuthHandler {
+	h.accountAccess = access
+	return h
+}
+
+// WithAudit records host-wide provider credential changes. These tokens are
+// shared by every project on the box, so who connected one matters.
+func (h *AgentAuthHandler) WithAudit(recorder serviceaudit.Recorder) *AgentAuthHandler {
+	h.audit = recorder
+	return h
+}
+
+// recordAgentAuth writes one provider-credential line. There is no true
+// "disconnect" flow today, so cancelling an in-flight login is the closest
+// thing and is recorded as one.
+func (h *AgentAuthHandler) recordAgentAuth(
+	r *http.Request,
+	binding agentauth.Binding,
+	action, step string,
+	err error,
+) {
+	recordAudit(
+		h.audit, r, action,
+		serviceaudit.Target{Type: serviceaudit.TargetAgent, ID: string(binding.ID()), Name: string(binding.ID())},
+		serviceaudit.Meta{"step": step},
+		err,
+	)
+}
+
 func (h *AgentAuthHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/agent-auth", h.handleCatalog)
 	for _, binding := range h.bindings {
 		binding := binding
 		prefix := "/api/" + string(binding.ID())
 		mux.HandleFunc(prefix+"/auth-status", func(w http.ResponseWriter, r *http.Request) {
-			h.handleStatus(binding, w)
+			h.handleStatus(binding, w, r)
 		})
 
 		switch binding.Flow() {
@@ -67,6 +101,20 @@ func (h *AgentAuthHandler) RegisterRoutes(mux *http.ServeMux) {
 		case agentauth.FlowAPIKey:
 			mux.HandleFunc(prefix+"/login/api-key", func(w http.ResponseWriter, r *http.Request) {
 				h.handleAPIKey(binding, w, r)
+			})
+		}
+		if binding.AccountsAvailable() {
+			mux.HandleFunc(prefix+"/accounts/import", func(w http.ResponseWriter, r *http.Request) {
+				h.handleAccountImport(binding, w, r)
+			})
+			mux.HandleFunc(prefix+"/accounts/login", func(w http.ResponseWriter, r *http.Request) {
+				h.handleAccountLoginStart(binding, w, r)
+			})
+			mux.HandleFunc(prefix+"/accounts/activate", func(w http.ResponseWriter, r *http.Request) {
+				h.handleAccountActivate(binding, w, r)
+			})
+			mux.HandleFunc(prefix+"/accounts", func(w http.ResponseWriter, r *http.Request) {
+				h.handleAccountDelete(binding, w, r)
 			})
 		}
 	}
@@ -118,6 +166,14 @@ func (h *AgentAuthHandler) handleCatalog(w http.ResponseWriter, r *http.Request)
 			status.Authenticated = true
 		} else if binding, ok := bindings[string(descriptor.ID)]; ok {
 			status = binding.Snapshot()
+			if h.accountAccess != nil {
+				var err error
+				status, err = h.accountAccess.Visible(r.Context(), binding.ID(), status)
+				if err != nil {
+					sendPermissionsError(w, err)
+					return
+				}
+			}
 		}
 		var apiKey *agentAuthAPIKeyResponse
 		if descriptor.APIKeyAuth != nil {
@@ -144,9 +200,15 @@ func (h *AgentAuthHandler) handleCatalog(w http.ResponseWriter, r *http.Request)
 	httptransport.SendJSON(w, http.StatusOK, agentAuthCatalogResponse{Providers: providers})
 }
 
-// Status remains open to every registered user. The outer authentication
-// middleware owns that registration gate when user auth is enabled.
-func (h *AgentAuthHandler) handleStatus(binding agentauth.Binding, w http.ResponseWriter) {
+// Raw status is reserved for account managers; the catalog exposes filtered
+// snapshots to other registered users.
+func (h *AgentAuthHandler) handleStatus(binding agentauth.Binding, w http.ResponseWriter, r *http.Request) {
+	if h.accountAccess != nil {
+		if err := h.accountAccess.RequireManage(r.Context()); err != nil {
+			sendPermissionsError(w, err)
+			return
+		}
+	}
 	httptransport.SendJSON(w, http.StatusOK, binding.Status())
 }
 
@@ -154,8 +216,13 @@ func (h *AgentAuthHandler) handleCodeStart(binding agentauth.Binding, w http.Res
 	if !h.requireMutationAccess(w, r) {
 		return
 	}
+	if binding.AccountsAvailable() {
+		httptransport.SendErr(w, http.StatusBadRequest, "account label is required; use the saved-account login flow")
+		return
+	}
 
 	result, err := binding.StartCode(r.Context())
+	h.recordAgentAuth(r, binding, serviceaudit.ActionSettingsAgentConnect, "start", err)
 	if err != nil {
 		httptransport.SendErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -179,7 +246,9 @@ func (h *AgentAuthHandler) handleCodeSubmit(binding agentauth.Binding, w http.Re
 		httptransport.SendErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := binding.SubmitCode(r.Context(), body.Code); err != nil {
+	err := binding.SubmitCode(r.Context(), body.Code)
+	h.recordAgentAuth(r, binding, serviceaudit.ActionSettingsAgentConnect, "code", err)
+	if err != nil {
 		status := http.StatusInternalServerError
 		if binding.IsCodeInputError(err) {
 			status = http.StatusBadRequest
@@ -194,7 +263,9 @@ func (h *AgentAuthHandler) handleCodeCancel(binding agentauth.Binding, w http.Re
 	if !h.requireMutationAccess(w, r) {
 		return
 	}
-	if err := binding.CancelCode(r.Context()); err != nil {
+	err := binding.CancelCode(r.Context())
+	h.recordAgentAuth(r, binding, serviceaudit.ActionSettingsAgentDisconnect, "cancel", err)
+	if err != nil {
 		httptransport.SendErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -205,7 +276,12 @@ func (h *AgentAuthHandler) handleDeviceStart(binding agentauth.Binding, w http.R
 	if !h.requireMutationAccess(w, r) {
 		return
 	}
+	if binding.AccountsAvailable() {
+		httptransport.SendErr(w, http.StatusBadRequest, "account label is required; use the saved-account login flow")
+		return
+	}
 	state, err := binding.StartDevice(r.Context())
+	h.recordAgentAuth(r, binding, serviceaudit.ActionSettingsAgentConnect, "device", err)
 	if err != nil {
 		httptransport.SendErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -227,23 +303,123 @@ func (h *AgentAuthHandler) handleAPIKey(binding agentauth.Binding, w http.Respon
 		err = binding.DeleteAPIKey(r.Context())
 	} else {
 		var body struct {
-			APIKey string `json:"apiKey"`
+			APIKey    string `json:"apiKey"`
+			Label     string `json:"label"`
+			AccountID string `json:"accountId"`
 		}
 		if decodeErr := readJSONBody(r, &body); decodeErr != nil {
 			httptransport.SendErr(w, http.StatusBadRequest, decodeErr.Error())
 			return
 		}
-		err = binding.SetAPIKey(r.Context(), body.APIKey)
+		err = binding.SetAPIKeyAccount(r.Context(), body.Label, body.AccountID, body.APIKey)
 	}
 	if err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, agentauth.ErrAPIKeyRequired) || errors.Is(err, agentauth.ErrAPIKeyRejected) {
+		if errors.Is(err, rbac.ErrDenied) || errors.Is(err, rbac.ErrActorRequired) {
+			status = http.StatusForbidden
+		} else if errors.Is(err, agentauth.ErrAPIKeyRequired) || errors.Is(err, agentauth.ErrAPIKeyRejected) ||
+			errors.Is(err, agentauth.ErrAccountLabelRequired) || errors.Is(err, agentauth.ErrAccountLabelInvalid) ||
+			errors.Is(err, agentauth.ErrAccountLabelConflict) || errors.Is(err, agentauth.ErrAccountNotFound) {
 			status = http.StatusBadRequest
 		}
 		httptransport.SendErr(w, status, err.Error())
 		return
 	}
 	httptransport.SendJSON(w, http.StatusOK, binding.Snapshot())
+}
+
+func (h *AgentAuthHandler) handleAccountImport(binding agentauth.Binding, w http.ResponseWriter, r *http.Request) {
+	if !h.requireMutationAccess(w, r) {
+		return
+	}
+	var body struct {
+		Label string `json:"label"`
+	}
+	if err := readJSONBody(r, &body); err != nil {
+		httptransport.SendErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := binding.ImportCurrentAccount(r.Context(), body.Label); err != nil {
+		h.sendAccountError(w, err)
+		return
+	}
+	httptransport.SendJSON(w, http.StatusOK, binding.Snapshot())
+}
+
+func (h *AgentAuthHandler) handleAccountLoginStart(binding agentauth.Binding, w http.ResponseWriter, r *http.Request) {
+	if !h.requireMutationAccess(w, r) {
+		return
+	}
+	var body struct {
+		Label     string `json:"label"`
+		AccountID string `json:"accountId"`
+	}
+	if err := readJSONBody(r, &body); err != nil {
+		httptransport.SendErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	state, err := binding.StartAccountLogin(r.Context(), body.Label, body.AccountID)
+	if err != nil {
+		h.sendAccountError(w, err)
+		return
+	}
+	httptransport.SendJSON(w, http.StatusOK, state)
+}
+
+func (h *AgentAuthHandler) handleAccountActivate(binding agentauth.Binding, w http.ResponseWriter, r *http.Request) {
+	if !h.requireMutationAccess(w, r) {
+		return
+	}
+	var body struct {
+		AccountID string `json:"accountId"`
+	}
+	if err := readJSONBody(r, &body); err != nil {
+		httptransport.SendErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := binding.ActivateAccount(r.Context(), body.AccountID); err != nil {
+		h.sendAccountError(w, err)
+		return
+	}
+	httptransport.SendJSON(w, http.StatusOK, binding.Snapshot())
+}
+
+func (h *AgentAuthHandler) handleAccountDelete(binding agentauth.Binding, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		httptransport.SendErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !h.requireAdminAccess(w, r) {
+		return
+	}
+	var body struct {
+		AccountID string `json:"accountId"`
+	}
+	if err := readJSONBody(r, &body); err != nil {
+		httptransport.SendErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := binding.DeleteAccount(r.Context(), body.AccountID); err != nil {
+		h.sendAccountError(w, err)
+		return
+	}
+	httptransport.SendJSON(w, http.StatusOK, binding.Snapshot())
+}
+
+func (h *AgentAuthHandler) sendAccountError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, rbac.ErrDenied), errors.Is(err, rbac.ErrActorRequired):
+		status = http.StatusForbidden
+	case errors.Is(err, agentauth.ErrAccountLabelRequired), errors.Is(err, agentauth.ErrAccountLabelInvalid), errors.Is(err, agentauth.ErrAccountLabelConflict):
+		status = http.StatusBadRequest
+	case errors.Is(err, agentauth.ErrAccountNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, agentauth.ErrAccountInUse), errors.Is(err, agentauth.ErrActiveAccountDelete),
+		errors.Is(err, agentauth.ErrAccountLoginInProgress), errors.Is(err, agentauth.ErrAccountIdentityMismatch):
+		status = http.StatusConflict
+	}
+	httptransport.SendErr(w, status, err.Error())
 }
 
 func (h *AgentAuthHandler) requireMutationAccess(w http.ResponseWriter, r *http.Request) bool {

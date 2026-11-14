@@ -288,5 +288,6 @@ func transcriptEventsCanCoalesce(left, right Event) bool {
 	return left.TurnID == right.TurnID &&
 		left.MessageID == right.MessageID &&
 		left.Provider == right.Provider &&
-		left.ScheduledTaskID == right.ScheduledTaskID
+		left.ScheduledTaskID == right.ScheduledTaskID &&
+		left.ApplicationID == right.ApplicationID && left.ApplicationRequestID == right.ApplicationRequestID
 }

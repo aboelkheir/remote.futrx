@@ -27,6 +27,9 @@ type ContainerLifecycle interface {
 	// Ensure converges a project to one complete, running container with all
 	// durable mounts attached.
 	Ensure(ctx context.Context, p Meta) error
+	// CheckCapacity reports ErrInsufficientStorage when the host cannot hold
+	// one more project container.
+	CheckCapacity(ctx context.Context) error
 	Busy(ctx context.Context, containerName string) (bool, error)
 	Start(ctx context.Context, containerName string) error
 	Stop(ctx context.Context, containerName string) error
@@ -46,6 +49,18 @@ type ContainerLifecycle interface {
 // ContainerEnvironment applies project secrets to future container sessions.
 type ContainerEnvironment interface {
 	ApplyDiff(ctx context.Context, containerName string, set map[string]string, unset []string) error
+}
+
+// ContainerSetup restores project tooling after mounts and secrets are ready.
+// Implementations skip completed setup and retain failures for a later retry.
+type ContainerSetup interface {
+	Ensure(ctx context.Context, containerName string, environment map[string]string) error
+}
+
+// ContainerSetupVerifier reruns the real script after an agent repair, even if
+// a success marker exists. Removing or disabling setup is not verification.
+type ContainerSetupVerifier interface {
+	Verify(ctx context.Context, containerName string, environment map[string]string) error
 }
 
 // ContainerInspector returns a best-effort diagnostic snapshot.
@@ -82,4 +97,5 @@ type ContainerDependencies struct {
 	Network     ContainerNetwork
 	Listeners   ContainerListeners
 	Browser     ContainerBrowser
+	Setup       ContainerSetup
 }

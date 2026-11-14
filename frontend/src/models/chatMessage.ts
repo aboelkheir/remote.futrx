@@ -23,6 +23,8 @@ export type AssistantMessagePart =
       interactionKind: string;
       supportsCancellation: boolean;
       status: string;
+      /** What the user answered, per question id; secret answers are never recorded. */
+      answers?: Record<string, string[]>;
     }
   | {
       kind: "collaboration";
@@ -41,6 +43,9 @@ export type AssistantMessageBlock = {
 };
 
 export type ChatMessageBlock =
-  | { type: "user"; text: string; t: number }
+  | { type: "user"; text: string; t: number; userEmail?: string }
   | AssistantMessageBlock
   | { type: "error"; message: string; t: number };
+
+// Identifies the text part already present when an active chat is opened.
+export type HydratedTextPart = { assistantT: number; partIndex: number };

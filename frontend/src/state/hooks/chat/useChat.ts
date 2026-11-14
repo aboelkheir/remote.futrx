@@ -18,25 +18,30 @@ import type {
   TranscriptIndexProgress,
 } from "../../../models/chat";
 import { chatEventStateProjector } from "./chatEventStateProjector";
-import type { ChatMessageBlock } from "../../../models/chatMessage";
+import type { ChatMessageBlock, HydratedTextPart } from "../../../models/chatMessage";
+import { isTerminalTurnStatus } from "../../../services/chat/turnStatus.ts";
+import { stopRunningChat } from "./stopRunningChat";
 
 interface UseChatResult {
   meta: ChatMeta | null;
   blocks: ChatMessageBlock[];
+  hydratedTextPart: HydratedTextPart | null;
   eventCount: number;
   hasOlder: boolean;
   loadingOlder: boolean;
   indexingProgress: TranscriptIndexProgress | null;
   status: ChatStatus;
+  locallyStartedTurn: boolean;
   error: string | null;
   canSendPrompt: boolean;
   sendPrompt: (text: string, clientId?: string) => boolean;
   promptOutcome: PromptOutcome | null;
   cancel: () => void;
+  stopActiveRun: () => Promise<void>;
   respondInteraction: ChatInteractionResponder;
   rewind: (beforeT: number) => Promise<ChatEventPage>;
   loadOlder: () => Promise<void>;
-  refreshMeta: () => Promise<void>;
+  refreshMeta: (throwOnError?: boolean) => Promise<void>;
 }
 
 /**
@@ -50,6 +55,7 @@ export function useChat(chatId: string): UseChatResult {
     chatEventStateProjector.empty()
   );
   const [status, setStatus] = useState<ChatStatus>("loading");
+  const [locallyStartedTurn, setLocallyStartedTurn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wsReady, setWsReady] = useState(false);
   // True once this connection has received its sync event. Until then the run
@@ -63,6 +69,7 @@ export function useChat(chatId: string): UseChatResult {
   const pendingEventsRef = useRef<ChatEvent[]>([]);
   const pendingFrameRef = useRef<number | null>(null);
   const lastSeqRef = useRef(0);
+  const hydratedTextPartRef = useRef<HydratedTextPart | null>(null);
 
   // The batcher reaches state only through refs and setState updaters, so these
   // three close over nothing that can go stale and take no dependencies. They
@@ -89,6 +96,10 @@ export function useChat(chatId: string): UseChatResult {
     );
     setRenderState((current) => chatEventStateProjector.append(current, events));
     setStatus((current) => chatEventStateProjector.statusAfter(events[events.length - 1], current));
+    if (events.some((event) => event.type === "user" || event.type === "complete" || event.type === "error"
+      || (event.type === "turn_status" && isTerminalTurnStatus(event.status)))) {
+      setLocallyStartedTurn(false);
+    }
   }, []);
 
   const enqueueEvent = useCallback((event: ChatEvent) => {
@@ -102,6 +113,7 @@ export function useChat(chatId: string): UseChatResult {
   useEffect(() => {
     let cancelled = false;
     setStatus("loading");
+    setLocallyStartedTurn(false);
     clearPendingEvents();
     setRenderState(chatEventStateProjector.empty());
     setMeta(null);
@@ -113,6 +125,7 @@ export function useChat(chatId: string): UseChatResult {
     setIndexingProgress(null);
     setHistoryReadyForStream(false);
     lastSeqRef.current = 0;
+    hydratedTextPartRef.current = null;
 
     (async () => {
       try {
@@ -128,7 +141,13 @@ export function useChat(chatId: string): UseChatResult {
           page.lastSeq,
           chatEventStateProjector.latestSequence(page.events)
         );
-        setRenderState(chatEventStateProjector.fromEvents(page.events, page));
+        const initialState = chatEventStateProjector.fromEvents(page.events, page);
+        const tail = initialState.blocks.at(-1);
+        const partIndex = tail?.type === "assistant" ? tail.parts.length - 1 : -1;
+        hydratedTextPartRef.current = tail?.type === "assistant" && tail.parts[partIndex]?.kind === "text"
+          ? { assistantT: tail.t, partIndex }
+          : null;
+        setRenderState(initialState);
         setIndexingProgress(page.indexing ?? null);
         setHistoryReadyForStream(!page.indexing || page.indexing.tailSeqKnown);
         setMeta(m);
@@ -190,6 +209,7 @@ export function useChat(chatId: string): UseChatResult {
           if (event.type === "sync") {
             setSynced(true);
             setStatus(event.running ? "streaming" : "ready");
+            if (!event.running) setLocallyStartedTurn(false);
             return;
           }
           if (
@@ -203,6 +223,7 @@ export function useChat(chatId: string): UseChatResult {
             if (typeof clientId === "string" && clientId) {
               setPromptOutcome({ clientId, accepted: event.subtype === "prompt_accepted" });
             }
+            if (event.subtype === "prompt_rejected") setLocallyStartedTurn(false);
             return;
           }
           enqueueEvent(event);
@@ -230,6 +251,7 @@ export function useChat(chatId: string): UseChatResult {
     if (!wsReady || !synced || !stream?.isOpen) return false;
     if (status !== "ready") return false;
     setStatus("streaming");
+    setLocallyStartedTurn(true);
     stream.sendPrompt(text, clientId);
     return true;
   }, [status, wsReady, synced]);
@@ -239,21 +261,30 @@ export function useChat(chatId: string): UseChatResult {
     if (stream?.isOpen) stream.cancel();
   }, []);
 
+  // WebSocket cancellation is only a request: the backend keeps its run lock
+  // until the provider exits. Rewind must wait for that authoritative state.
+  const stopActiveRun = useCallback(() => stopRunningChat({
+    isRunning: async () => (await chatApi.fetch(chatId)).running === true,
+    sendCancel: () => streamRef.current?.cancel() ?? false,
+  }), [chatId]);
+
   const respondInteraction = useCallback<ChatInteractionResponder>((interactionId, method, intent) => {
     const stream = streamRef.current;
     if (!wsReady || !synced || !stream?.isOpen || status !== "streaming") return false;
     return stream.respondInteraction(interactionId, method, intent);
   }, [status, wsReady, synced]);
 
-  const rewind = useCallback(async (beforeT: number) => {
-    const res = await chatApi.rewind(chatId, beforeT);
+  const rewind = useCallback(async (rewindBeforeTimestamp: number) => {
+    const res = await chatApi.rewind(chatId, rewindBeforeTimestamp);
     clearPendingEvents();
+    hydratedTextPartRef.current = null;
     lastSeqRef.current = Math.max(
       res.lastSeq,
       chatEventStateProjector.latestSequence(res.events)
     );
     setRenderState(chatEventStateProjector.fromEvents(res.events, res));
     setStatus("ready");
+    setLocallyStartedTurn(false);
     return res;
   }, [chatId]);
 
@@ -271,22 +302,27 @@ export function useChat(chatId: string): UseChatResult {
     }
   }, [chatId, loadingOlder, renderState.hasOlder, renderState.nextBefore]);
 
-  const refreshMeta = useCallback(async () => {
+  const refreshMeta = useCallback(async (throwOnError = false) => {
     if (!chatId) return;
     try {
       const m = await chatApi.fetch(chatId);
       setMeta(m);
-    } catch {}
+    } catch (error) {
+      // Rewind reports refresh failures separately after the destructive action.
+      if (throwOnError) throw error;
+    }
   }, [chatId]);
 
   return {
     meta,
     blocks: renderState.blocks,
+    hydratedTextPart: hydratedTextPartRef.current,
     eventCount: renderState.eventCount,
     hasOlder: renderState.hasOlder,
     loadingOlder,
     indexingProgress,
     status,
+    locallyStartedTurn,
     error,
     // A known canonical tail lets the socket synchronize safely even while
     // older transcript items continue materializing in the background.
@@ -294,6 +330,7 @@ export function useChat(chatId: string): UseChatResult {
     sendPrompt,
     promptOutcome,
     cancel,
+    stopActiveRun,
     respondInteraction,
     rewind,
     loadOlder,

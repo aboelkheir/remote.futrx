@@ -3,6 +3,7 @@ package httphandlers
 import (
 	"context"
 	"encoding/json"
+	permission "github.com/futrx-com/remote.futrx.com/internal/rbac"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -179,12 +180,12 @@ func newAgentBrowserProjectHandler(t *testing.T) (*ProjectHandler, *fakeProjectC
 		Network:     containers,
 		Listeners:   containers,
 		Browser:     fakeProjectBrowser{containers: containers},
-	}, nil, nil)
-	project, err := projects.Create(context.Background(), serviceproject.CreateInput{Name: "Browser Project"}, "user@example.com")
+	}, nil, nil, serviceproject.WithAuthorizer(browserTestAuthorizer{}))
+	project, err := projects.Create(permission.ContextWithSystemActor(context.Background()), serviceproject.CreateInput{Name: "Browser Project"}, "user@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewProjectHandler(projects, nil, nil, "remote.futrx.com"), containers, project
+	return NewProjectHandler(projects, nil, nil, "remote.futrx.com", nil), containers, project
 }
 
 type fakeProjectContainers struct {
@@ -233,6 +234,8 @@ func (fakeProjectBrowser) Port() int { return 6080 }
 func (f *fakeProjectContainers) Available() bool { return true }
 
 func (f *fakeProjectContainers) Ensure(context.Context, serviceproject.Meta) error { return nil }
+
+func (f *fakeProjectContainers) CheckCapacity(context.Context) error { return nil }
 
 func (f *fakeProjectContainers) Busy(context.Context, string) (bool, error) { return false, nil }
 
@@ -384,3 +387,7 @@ func waitForAgentBrowserReady(t *testing.T, handler *ProjectHandler, project ser
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+type browserTestAuthorizer struct{}
+
+func (browserTestAuthorizer) Require(context.Context, permission.Check) error { return nil }

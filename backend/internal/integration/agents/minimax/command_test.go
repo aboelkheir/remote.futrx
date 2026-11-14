@@ -12,6 +12,7 @@ import (
 	"github.com/futrx-com/remote.futrx.com/internal/agent"
 	"github.com/futrx-com/remote.futrx.com/internal/agent/provisioning"
 	configconstants "github.com/futrx-com/remote.futrx.com/internal/config/constants"
+	agentauth "github.com/futrx-com/remote.futrx.com/internal/service/agent/auth"
 )
 
 func TestMiniMaxConfigUsesSelectedModelResponsesAndEnvironmentKey(t *testing.T) {
@@ -52,6 +53,7 @@ func TestProviderRequiresConfiguredMiniMaxAPIKey(t *testing.T) {
 		miniMaxTestModels{},
 		&miniMaxTestRuntimeAssets{},
 		"codex",
+		newAPIKeyValidator(),
 	)
 	if _, err := provider.apiKey(); !errors.Is(err, ErrMiniMaxAPIKeyMissing) {
 		t.Fatalf("error = %v, want ErrMiniMaxAPIKeyMissing", err)
@@ -76,6 +78,7 @@ func TestBuildCmdPublishesLiveCatalogAndPreservesManagedSecret(t *testing.T) {
 		miniMaxTestModels{},
 		runtimeAssets,
 		"codex",
+		newAPIKeyValidator(),
 	)
 	modelCatalog := []byte(`{"models":[{"slug":"MiniMax-M2.7"}]}`)
 	req := agent.RunRequest{
@@ -135,6 +138,7 @@ func TestBuildCmdProcessOutlivesRequestCancellation(t *testing.T) {
 		miniMaxTestModels{},
 		&miniMaxTestRuntimeAssets{},
 		"codex",
+		newAPIKeyValidator(),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd, err := provider.buildCmd(
@@ -162,6 +166,7 @@ func TestBuildCmdRequiresRuntimeCatalogProvisioner(t *testing.T) {
 		miniMaxTestModels{},
 		nil,
 		"codex",
+		newAPIKeyValidator(),
 	)
 	_, err := provider.buildCmd(
 		context.Background(),
@@ -189,6 +194,10 @@ type miniMaxTestAPIKeys struct {
 
 func (s miniMaxTestAPIKeys) APIKey() (string, bool) {
 	return s.key, s.key != ""
+}
+
+func (s miniMaxTestAPIKeys) APIKeyForRun(_ context.Context, id string) (agentauth.RunAPIKey, bool, error) {
+	return agentauth.RunAPIKey{AccountID: id, Key: s.key}, s.key != "", nil
 }
 
 type miniMaxTestPreparer struct {
@@ -219,3 +228,5 @@ func (p *miniMaxTestRuntimeAssets) Ensure(
 	p.assets = append([]provisioning.RuntimeAsset(nil), assets...)
 	return p.err
 }
+
+func (miniMaxTestAPIKeys) RequireRunAccess(context.Context, string) error { return nil }

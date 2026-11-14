@@ -2,10 +2,15 @@ package transport
 
 import (
 	"context"
+	"errors"
+	"github.com/futrx-com/remote.futrx.com/internal/rbac"
+	"github.com/futrx-com/remote.futrx.com/internal/service/workspaceaccess"
 	"io/fs"
 	"net/http"
 
+	"github.com/futrx-com/remote.futrx.com/internal/integration/tmuxcli"
 	service "github.com/futrx-com/remote.futrx.com/internal/service"
+	serviceaudit "github.com/futrx-com/remote.futrx.com/internal/service/audit"
 	serviceauth "github.com/futrx-com/remote.futrx.com/internal/service/auth"
 	servicechat "github.com/futrx-com/remote.futrx.com/internal/service/chat"
 	servicegithistory "github.com/futrx-com/remote.futrx.com/internal/service/githistory"
@@ -13,7 +18,6 @@ import (
 	serviceselfupdate "github.com/futrx-com/remote.futrx.com/internal/service/selfupdate"
 	serviceserverinfo "github.com/futrx-com/remote.futrx.com/internal/service/serverinfo"
 	serviceworkspacefiles "github.com/futrx-com/remote.futrx.com/internal/service/workspacefiles"
-	serviceworkspaceide "github.com/futrx-com/remote.futrx.com/internal/service/workspaceide"
 	"github.com/futrx-com/remote.futrx.com/internal/stores/fileauth"
 	httptransport "github.com/futrx-com/remote.futrx.com/internal/transport/http"
 	httphandlers "github.com/futrx-com/remote.futrx.com/internal/transport/http/handlers"
@@ -21,13 +25,8 @@ import (
 	wstransport "github.com/futrx-com/remote.futrx.com/internal/transport/ws"
 )
 
-type TmuxClient interface {
-	wstransport.TmuxSessionClient
-}
-
 type Dependencies struct {
 	Services       service.Services
-	TmuxClient     TmuxClient
 	Static         fs.FS
 	DataDir        string
 	PublicHostname string
@@ -35,10 +34,10 @@ type Dependencies struct {
 	SelfUpdate     *serviceselfupdate.Service
 	Files          *serviceworkspacefiles.Service
 	GitHistory     *servicegithistory.Service
-	IDE            *serviceworkspaceide.Service
 }
 
 func NewHTTPHandler(deps Dependencies) (http.Handler, error) {
+	var auditLog serviceaudit.Recorder = deps.Services.Audit
 	agentAuthBindings := deps.Services.Agents.Bindings()
 	var auth httptransport.RouteRegistrar
 	var middleware httptransport.Middleware
@@ -64,14 +63,16 @@ func NewHTTPHandler(deps Dependencies) (http.Handler, error) {
 	}
 
 	gate := newAccessGate(deps.Services.Auth, deps.Services.Projects, deps.Services.Chats)
+	if gate != nil {
+		gate.authorizer = deps.Services.Permissions
+	}
 
 	uploads, err := httptransport.NewUploadHandlerWithGate(deps.Services.Chats, deps.DataDir, gate)
 	if err != nil {
 		return nil, err
 	}
+	uploads = uploads.WithAudit(auditLog)
 	chatSocket := wstransport.NewChatSocket(deps.Services.Chats, deps.Services.Runs, deps.Services.Prompt)
-	terminalSocket := wstransport.NewContainerTerminalSocket(deps.Services.Chats, deps.Services.Projects)
-	tmuxSocket := wstransport.NewTmuxSocket(deps.TmuxClient)
 	workspaceSocket := wstransport.NewWorkspaceSocket(
 		deps.Services.Chats,
 		deps.Services.Projects,
@@ -79,68 +80,82 @@ func NewHTTPHandler(deps Dependencies) (http.Handler, error) {
 	)
 	if deps.Services.Auth != nil {
 		chatSocket = chatSocket.WithAccessChecker(gate)
-		terminalSocket = terminalSocket.WithAccessChecker(gate)
-		tmuxSocket = tmuxSocket.WithAccessChecker(gate)
 		workspaceSocket = workspaceSocket.WithVisibility(gate)
 	}
-	scheduleHandler := httphandlers.NewScheduleHandler(
-		deps.Services.Schedules,
-		deps.Services.ScheduleCaps,
-		deps.Services.Auth,
-	)
+	var agentApplications httphandlers.AgentApplications
+	if deps.Services.Applications != nil {
+		agentApplications = deps.Services.Applications
+	}
+	agentApplicationsHandler := httphandlers.NewAgentApplicationsHandler(agentApplications)
 	usageHandler := httphandlers.NewUsageHandler(deps.Services.Usage, deps.Services.Auth)
+	agentQuotaHandler := httphandlers.NewAgentQuotaHandler(deps.Services.AgentQuota, deps.Services.Auth).WithAccountAccess(deps.Services.AccountAccess)
 	chatHandler := httphandlers.NewChatHandler(
 		deps.Services.Chats,
 		deps.Services.ChatAccess,
 		deps.Services.Auth,
 		deps.Files,
 		deps.GitHistory,
-		deps.IDE,
-	).WithSchedules(scheduleHandler)
+	).WithAudit(auditLog)
 
-	return httptransport.NewHandler(httptransport.Handlers{
-		Sessions: httphandlers.NewTmuxHandler(deps.Services.Tmux),
-		Chats:    chatHandler,
+	applicationsHandler := httphandlers.NewApplicationsHandler(
+		deps.Services.Applications,
+		deps.Services.Auth,
+		deps.Services.Projects,
+	).WithWebHost(deps.PublicHostname)
+
+	handler := httptransport.NewHandler(httptransport.Handlers{
+		Chats: chatHandler,
 		Projects: httphandlers.NewProjectHandler(
 			deps.Services.Projects,
 			deps.Services.Users,
 			deps.Services.Auth,
 			deps.PublicHostname,
+			applicationsHandler,
 		).WithUsage(usageHandler).WithShares(deps.Services.Shares),
-		Users: httphandlers.NewUsersHandler(deps.Services.Users, deps.Services.Auth),
+		Applications: applicationsHandler,
+		Users:        httphandlers.NewUsersHandler(deps.Services.Users, deps.Services.Auth),
 		AgentAuth: httphandlers.NewAgentAuthHandler(
 			agentAuthBindings,
 			deps.Services.Auth,
 			deps.Services.Agents,
-		),
+		).WithAccountAccess(deps.Services.AccountAccess).WithAudit(auditLog),
 		AgentCapabilities:  httphandlers.NewAgentCapabilitiesHandler(deps.Services.AgentCapabilities),
 		VoiceTranscription: httphandlers.NewVoiceTranscriptionHandler(fileauth.New(deps.DataDir), deps.Services.Auth, nil, ""),
 		UserSettings: httphandlers.NewUserSettingsHandler(
 			deps.Services.UserSettings,
 			deps.Services.Auth,
 		),
+		Audit:    httphandlers.NewAuditHandler(deps.Services.Audit, deps.Services.Auth),
 		Security: httphandlers.NewSecurityHandler(deps.Services.Auth),
 		Push: httphandlers.NewPushHandler(
 			deps.Services.Push,
 			deps.Services.Auth,
 			deps.Services.Presence,
 		),
-		ServerInfo:       httphandlers.NewServerInfoHandler(deps.ServerInfo),
-		SelfUpdate:       httphandlers.NewSelfUpdateHandler(deps.SelfUpdate, deps.Services.Auth),
-		Skills:           httphandlers.NewSkillHandler(deps.Services.Skills),
-		BrowserInspector: httphandlers.NewBrowserInspectorHandler(),
-		Schedules:        scheduleHandler,
-		Usage:            usageHandler,
-		Uploads:          uploads,
-		TmuxWS:           tmuxSocket,
-		TerminalWS:       terminalSocket,
-		ChatWS:           chatSocket,
-		WorkspaceWS:      workspaceSocket,
-		AgentAuthWS:      wstransport.NewAgentAuthSocket(agentAuthBindings),
-		Auth:             auth,
-		Middleware:       middleware,
-		Static:           httptransport.NewStaticHandler(deps.Static),
-	}), nil
+		EmailSettings:     httphandlers.NewEmailSettingsHandler(deps.Services.Email, deps.Services.Auth),
+		ServerInfo:        httphandlers.NewServerInfoHandler(deps.ServerInfo),
+		SelfUpdate:        httphandlers.NewSelfUpdateHandler(deps.SelfUpdate, deps.Services.Auth),
+		Skills:            httphandlers.NewSkillHandler(deps.Services.Skills),
+		BrowserInspector:  httphandlers.NewBrowserInspectorHandler(),
+		AgentApplications: agentApplicationsHandler,
+		Permissions:       httphandlers.NewPermissionsHandler(deps.Services.Permissions).WithAccounts(deps.Services.AccountAccess),
+		Usage:             usageHandler,
+		AgentQuota:        agentQuotaHandler,
+		Uploads:           uploads,
+		ChatWS:            chatSocket,
+		WorkspaceWS:       workspaceSocket,
+		AgentAuthWS:       wstransport.NewAgentAuthSocket(agentAuthBindings).WithAccountAccess(deps.Services.AccountAccess),
+		HostTerminalWS:    wstransport.NewTmuxSocket(tmuxcli.New()).WithAccessChecker(gate),
+		Auth:              auth,
+		Workspace:         httpmiddleware.Workspace{Authorizer: deps.Services.Permissions, Chats: deps.Services.Chats},
+		Middleware:        middleware,
+		Static:            httptransport.NewStaticHandler(deps.Static),
+	})
+	baseURL := "https://" + deps.PublicHostname
+	if deps.Services.Auth != nil {
+		baseURL = deps.Services.Auth.BaseURL()
+	}
+	return httpmiddleware.NewBrowserProtection(baseURL).Wrap(applicationsHandler.WebHandler(handler)), nil
 }
 
 func NewHTTPServer(addr string, handler http.Handler) *http.Server {
@@ -152,10 +167,11 @@ func NewHTTPServer(addr string, handler http.Handler) *http.Server {
 // reach this project?" lookups so each socket / upload site doesn't have
 // to wire up the auth + project + chat services itself.
 type accessGate struct {
-	auth      *serviceauth.Service
-	principal *httptransport.PrincipalResolver
-	projects  *serviceproject.Service
-	chats     chatProjectFinder
+	authorizer workspaceaccess.Authorizer
+	auth       *serviceauth.Service
+	principal  *httptransport.PrincipalResolver
+	projects   *serviceproject.Service
+	chats      chatProjectFinder
 }
 
 type chatProjectFinder interface {
@@ -199,9 +215,6 @@ func (g *accessGate) CanUploadToChat(ctx context.Context, r *http.Request, chatI
 	if err != nil || email == "" {
 		return false, err
 	}
-	if isAdmin {
-		return true, nil
-	}
 	if g.chats == nil {
 		return false, nil
 	}
@@ -209,8 +222,15 @@ func (g *accessGate) CanUploadToChat(ctx context.Context, r *http.Request, chatI
 	if err != nil {
 		return false, err
 	}
-	if meta.ProjectID == "" {
-		return true, nil
+	if !isAdmin && meta.ProjectID != "" {
+		allowed, err := g.HasAccess(ctx, serviceproject.ID(meta.ProjectID), email)
+		if err != nil || !allowed {
+			return false, err
+		}
 	}
-	return g.HasAccess(ctx, serviceproject.ID(meta.ProjectID), email)
+	err = workspaceaccess.Require(ctx, g.authorizer, "files", string(meta.ProjectID))
+	if errors.Is(err, rbac.ErrDenied) || errors.Is(err, rbac.ErrActorRequired) {
+		return false, nil
+	}
+	return err == nil, err
 }

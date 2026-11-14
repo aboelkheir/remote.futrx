@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "preact/hooks";
 import { CHAT_FIND_SKIP_ATTRIBUTE } from "../../../config/chat.ts";
 import type { ChatFind } from "../../../state/hooks/chat/useChatFind";
+import { shortcutService } from "../../../services/platform/shortcutService.ts";
 import { ArrowDown, ArrowUp, Search, X } from "../../primitives/icons";
 
 const stepButtonClass =
@@ -56,6 +57,12 @@ export function ChatFindBar({
             if (event.key === "Enter") {
               event.preventDefault();
               event.shiftKey ? find.previous() : find.next();
+            } else if (shortcutService.isFind(event)) {
+              // Cmd/Ctrl+F again re-selects the query, as a browser's find
+              // does, and stays with this bar rather than opening another.
+              event.preventDefault();
+              event.stopPropagation();
+              event.currentTarget.select();
             }
           }}
           placeholder="Find in chat"

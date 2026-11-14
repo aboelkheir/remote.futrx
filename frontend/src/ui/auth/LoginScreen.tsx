@@ -56,7 +56,7 @@ export function LoginScreen({
 
   if (challenge.pending) {
     return (
-      <div class="app-shell overflow-y-auto grid place-items-center bg-[#090b0f] text-ink-100 p-5">
+      <div class="app-shell overflow-y-auto grid place-items-center bg-app text-ink-100 p-5">
         <TwoFactorChallengeStep
           code={challenge.code}
           error={challenge.error}

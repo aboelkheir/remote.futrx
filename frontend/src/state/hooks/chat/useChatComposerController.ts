@@ -1,10 +1,11 @@
 import { useStore } from "zustand";
-import { useCallback, useEffect, useRef } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { ChatStatus, PromptOutcome } from "../../../models/chat";
 import { useConfirm } from "../../context/ConfirmContext";
 import { chatAttachmentService } from "../../../services/chat/chatAttachmentService.ts";
 import { chatComposerSessionStore } from "../../stores/chat/composerSessionStore";
 import { promptQueueState } from "./promptQueueState";
+import { runChatRewind } from "./chatRewindFlow";
 import { useAttachmentUpload } from "./useAttachmentUpload";
 import { useAutosizeTextarea } from "./useAutosizeTextarea";
 import { useDragUpload } from "./useDragUpload";
@@ -20,8 +21,10 @@ export function useChatComposerController({
   sendPrompt,
   promptOutcome,
   rewind,
+  stopActiveRun,
   refreshMeta,
   attachmentBasePath,
+  projectId,
 }: {
   chatId: string;
   eventCount: number;
@@ -30,11 +33,19 @@ export function useChatComposerController({
   canSendPrompt: boolean;
   sendPrompt: (text: string, clientId?: string) => boolean;
   promptOutcome: PromptOutcome | null;
-  rewind: (beforeT: number) => Promise<unknown>;
-  refreshMeta: () => Promise<void>;
+  rewind: (rewindBeforeTimestamp: number) => Promise<unknown>;
+  stopActiveRun: () => Promise<void>;
+  refreshMeta: (throwOnError?: boolean) => Promise<void>;
   attachmentBasePath: string;
+  /**
+   * Carried through to the upload hook so an extension can tell which
+   * project's plugin an attachment belongs to.
+   */
+  projectId?: string;
 }) {
   const confirm = useConfirm();
+  const [rewindPending, setRewindPending] = useState(false);
+  const rewindPendingRef = useRef(false);
   // ChatContainer remounts on chat switch (it is keyed by chatId), so selecting
   // the active draft from the session store is what makes a half-typed message
   // survive leaving and returning to a chat.
@@ -53,13 +64,14 @@ export function useChatComposerController({
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { textareaRef, focusInput } = useAutosizeTextarea(text);
-  const upload = useAttachmentUpload(chatId, attachmentBasePath);
+  const upload = useAttachmentUpload(chatId, attachmentBasePath, projectId);
   const drag = useDragUpload(upload.doUpload);
   const scroll = useThreadScroll(chatId, `${eventCount}:${blockCount}`);
   const queue = usePromptQueue({
     chatId,
     status,
     canSendPrompt,
+    suspended: rewindPending,
     sendPrompt,
     promptOutcome,
     onSent: scroll.unlockAutoScroll,
@@ -69,30 +81,34 @@ export function useChatComposerController({
     scroll.unlockAutoScroll();
   }, [chatId]);
 
-  async function handleRewind(t: number, promptText: string) {
-    if (status === "streaming") {
-      alert("Cancel the current run before rewinding this chat.");
-      return;
-    }
-    const confirmed = await confirm({
-      title: "Rewind chat",
-      description: "This action cannot be undone.",
-      message: "Every message from this prompt forward is removed, and the prompt is put back in the composer.",
-      confirmLabel: "Rewind",
-    });
-    if (!confirmed) return;
+  async function handleRewind(rewindBeforeTimestamp: number, promptText: string) {
+    // The server may become idle between cancellation and rewind. Hold queued
+    // prompts during the whole dialog so none start a new run in that gap.
+    if (rewindPendingRef.current) return;
+    rewindPendingRef.current = true;
+    setRewindPending(true);
     try {
-      await rewind(t);
-      queue.clearQueuedPrompts();
-      setText(promptText);
-      await refreshMeta();
-      scroll.unlockAutoScroll();
-      setTimeout(() => {
-        scroll.jumpToBottom();
-        focusInput();
-      }, 0);
-    } catch (rewindError) {
-      alert("rewind failed: " + (rewindError as Error).message);
+      await runChatRewind({
+        status,
+        rewindBeforeTimestamp,
+        promptText,
+        confirm,
+        stopAgent: stopActiveRun,
+        rewind,
+        clearQueuedPrompts: queue.clearQueuedPrompts,
+        restorePrompt: setText,
+        refreshMeta,
+        onComplete: () => {
+          scroll.unlockAutoScroll();
+          setTimeout(() => {
+            scroll.jumpToBottom();
+            focusInput();
+          }, 0);
+        },
+      });
+    } finally {
+      rewindPendingRef.current = false;
+      setRewindPending(false);
     }
   }
 
@@ -137,9 +153,10 @@ export function useChatComposerController({
     setTimeout(focusInput, 0);
   }
 
-  function handleAnswerQuestion(answer: string) {
+  function handleAnswerQuestion(answer: string): boolean {
     const sent = sendPrompt(answer);
     if (sent) scroll.unlockAutoScroll();
+    return sent;
   }
 
   return {
