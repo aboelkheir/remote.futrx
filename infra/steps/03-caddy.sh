@@ -15,6 +15,12 @@ TMP_CADDYFILE="$(mktemp)"
 trap 'rm -f "$TMP_CADDYFILE"' RETURN
 render_template "${INFRA_DIR}/templates/Caddyfile.tmpl" "$TMP_CADDYFILE"
 
+# Preserve routes owned by other services when updating the main Caddyfile.
+for snippet in /etc/caddy/*.caddy; do
+    [ -f "$snippet" ] || continue
+    printf 'import %s\n' "$snippet" >> "$TMP_CADDYFILE"
+done
+
 if ! caddy validate --config "$TMP_CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
     err "Rendered Caddyfile is invalid — leaving live config untouched."
     caddy validate --config "$TMP_CADDYFILE" --adapter caddyfile 2>&1 | tail -20 >&2
