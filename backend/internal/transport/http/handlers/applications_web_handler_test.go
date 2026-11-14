@@ -52,3 +52,22 @@ func TestApplicationWebRouteRejectsMalformedNames(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyIDEHostsReachPlatformRouter(t *testing.T) {
+	handler := (&ApplicationsHandler{}).WithWebHost("remote.test")
+	platform := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	for _, host := range []string{"code.remote.test", "project-one.code.remote.test"} {
+		rec := httptest.NewRecorder()
+		handler.WebHandler(platform).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://"+host+"/auth/verify", nil))
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("%s: status %d, want platform router", host, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	handler.WebHandler(platform).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://extra.project-one.code.remote.test/auth/verify", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("malformed IDE host: status %d, want 404", rec.Code)
+	}
+}

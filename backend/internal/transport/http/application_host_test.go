@@ -36,6 +36,26 @@ func TestProjectApplicationHosts(t *testing.T) {
 	}
 }
 
+func TestLegacyIDEHost(t *testing.T) {
+	for _, test := range []struct {
+		host string
+		slug string
+		ok   bool
+	}{
+		{"code.remote.test", "", true},
+		{"project-one.code.remote.test", "project-one", true},
+		{"project-one.code.remote.test:443", "project-one", true},
+		{"project-one.code.remote.test.evil", "", false},
+		{"extra.project-one.code.remote.test", "", false},
+		{"code.other.test", "", false},
+	} {
+		slug, ok := LegacyIDEHost(test.host, "remote.test")
+		if slug != test.slug || ok != test.ok {
+			t.Errorf("LegacyIDEHost(%q) = (%q, %t), want (%q, %t)", test.host, slug, ok, test.slug, test.ok)
+		}
+	}
+}
+
 func TestApplicationHostSeparatorAndLength(t *testing.T) {
 	for _, slug := range []string{"code", "dev", "apps", "gamerhead", "other-project"} {
 		host := ApplicationHost(slug, "code", "example.com")

@@ -28,6 +28,9 @@ func (h *authVerifyHandler) RegisterRoutes(mux *http.ServeMux) {
 func (h *authVerifyHandler) verify(w http.ResponseWriter, r *http.Request) {
 	host := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Host")))
 	matchedSlug, matchedPort := h.matchPreviewHost(host)
+	if legacySlug, legacyIDE := httptransport.LegacyIDEHost(host, baseHost(h.auth.BaseURL())); legacyIDE && legacySlug != "" {
+		matchedSlug, matchedPort = legacySlug, 8842
+	}
 
 	// Only the preview host class can be authorized by a public share link.
 	// It runs before the session check so that a member who opens a share
@@ -36,14 +39,13 @@ func (h *authVerifyHandler) verify(w http.ResponseWriter, r *http.Request) {
 	if matchedSlug != "" && previewCapability(matchedPort) == "" && h.authorizeShare(w, r, matchedSlug, matchedPort) {
 		return
 	}
-	if h.verifySession(w, r, matchedSlug) {
+	if h.verifySession(w, r, matchedSlug, matchedPort) {
 		w.WriteHeader(http.StatusOK)
 	}
 }
 
-func (h *authVerifyHandler) verifySession(w http.ResponseWriter, r *http.Request, matchedSlug string) bool {
+func (h *authVerifyHandler) verifySession(w http.ResponseWriter, r *http.Request, matchedSlug string, port int) bool {
 	var err error
-	_, port := h.matchPreviewHost(strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))))
 	if capability := previewCapability(port); capability != "" {
 		err = h.access.VerifyWorkspace(r.Context(), httptransport.SessionCookieValue(r), matchedSlug, capability)
 	} else {

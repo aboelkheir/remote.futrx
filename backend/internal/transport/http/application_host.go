@@ -44,6 +44,27 @@ func IsApplicationHost(host, publicHost string) bool {
 	return last != "dev"
 }
 
+// LegacyIDEHost identifies the shared launcher and one project IDE hostname.
+// These reserved hosts are routed by Caddy, not by the application gateway.
+func LegacyIDEHost(host, publicHost string) (string, bool) {
+	host, base := requestHostname(host), requestHostname(publicHost)
+	if base == "" {
+		return "", false
+	}
+	if host == "code."+base {
+		return "", true
+	}
+	suffix := ".code." + base
+	if !strings.HasSuffix(host, suffix) {
+		return "", false
+	}
+	slug := strings.TrimSuffix(host, suffix)
+	if strings.Contains(slug, ".") || !svc.ValidWebSubdomain(slug) {
+		return "", false
+	}
+	return slug, true
+}
+
 // ApplicationProject returns the manifest label and project slug of a named host.
 func ApplicationProject(host, publicHost string) (string, string, bool) {
 	if !IsApplicationHost(host, publicHost) {
