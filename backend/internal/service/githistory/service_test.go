@@ -13,7 +13,7 @@ import (
 )
 
 func TestRepositoryDiscoverySkipsProviderCompatibilityHomes(t *testing.T) {
-	for _, directory := range []string{".claude", ".codex", ".minimax"} {
+	for _, directory := range []string{".claude", ".codex", ".minimax", ".opencode"} {
 		if !slices.Contains(skippedDirectories, directory) {
 			t.Fatalf("skippedDirectories is missing %q", directory)
 		}

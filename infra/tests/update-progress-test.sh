@@ -21,11 +21,38 @@ grep -Eq '"updatedAt":[0-9]+' "$FUTRX_UPDATE_PROGRESS_PATH"
 
 grep -Fq 'maintenance.json' "$UPGRADE_SCRIPT"
 grep -Fq -- '--progress-file' "$UPGRADE_SCRIPT"
+grep -Fq 'FUTRX_SERVICE_UNIT_PATH' "$UPGRADE_SCRIPT"
+grep -Fq 'Environment=BASE_URL=' "$UPGRADE_SCRIPT"
+if grep -Fq 'source "$INSTALL_DIR/config.env"' "$UPGRADE_SCRIPT"; then
+    echo "workspace upgrader must not source secret-bearing config.env" >&2
+    exit 1
+fi
 if grep -Eq 'systemctl[[:space:]]+stop' "$UPGRADE_SCRIPT"; then
     echo "workspace upgrader still stops the control plane" >&2
     exit 1
 fi
 grep -Fq 'lib/update-progress.sh' "$UPDATE_SCRIPT"
 grep -Fq 'lib/update-progress.sh' "$DEPLOY_SCRIPT"
+
+# A successful full update must retain the structured workspace warnings
+# instead of overwriting them with the generic finishing phase.
+mkdir -p "$TEST_DIR/infra"
+cat > "$TEST_DIR/infra/install.sh" <<'INSTALL'
+exit 0
+INSTALL
+cat > "$TEST_DIR/infra/upgrade-workspaces.sh" <<'UPGRADE'
+printf '%s\n' '{"phase":"workspace-migration","message":"Complete","setupFailures":["needs-repair"],"updatedAt":123}' > "$FUTRX_UPDATE_PROGRESS_PATH"
+UPGRADE
+(
+    . "$UPDATE_SCRIPT"
+    SCRIPT_INFRA_DIR="$TESTS_DIR/.."
+    INFRA_DIR="$TEST_DIR/infra"
+    HOSTNAME="test.invalid"
+    UPDATE_WORKSPACES=1
+    INCLUDE_BUSY=0
+    remote_converge_update > "$TEST_DIR/update.log"
+)
+grep -Fq '"setupFailures":["needs-repair"]' "$FUTRX_UPDATE_PROGRESS_PATH"
+grep -Fq 'update complete' "$TEST_DIR/update.log"
 
 echo "update progress writer tests passed"

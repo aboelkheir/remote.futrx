@@ -9,22 +9,22 @@ import (
 	"strconv"
 	"strings"
 
+	permission "github.com/futrx-com/remote.futrx.com/internal/rbac"
+	serviceaudit "github.com/futrx-com/remote.futrx.com/internal/service/audit"
 	serviceauth "github.com/futrx-com/remote.futrx.com/internal/service/auth"
 	servicechat "github.com/futrx-com/remote.futrx.com/internal/service/chat"
 	servicegithistory "github.com/futrx-com/remote.futrx.com/internal/service/githistory"
 	serviceworkspacefiles "github.com/futrx-com/remote.futrx.com/internal/service/workspacefiles"
-	serviceworkspaceide "github.com/futrx-com/remote.futrx.com/internal/service/workspaceide"
 	httptransport "github.com/futrx-com/remote.futrx.com/internal/transport/http"
 )
 
 type ChatHandler struct {
-	chats     *servicechat.Service
-	access    *servicechat.AccessService
-	auth      *serviceauth.Service
-	files     *serviceworkspacefiles.Service
-	history   *servicegithistory.Service
-	ide       *serviceworkspaceide.Service
-	schedules *ScheduleHandler
+	chats   *servicechat.Service
+	access  *servicechat.AccessService
+	auth    *serviceauth.Service
+	files   *serviceworkspacefiles.Service
+	history *servicegithistory.Service
+	audit   serviceaudit.Recorder
 }
 
 func NewChatHandler(
@@ -33,7 +33,6 @@ func NewChatHandler(
 	auth *serviceauth.Service,
 	files *serviceworkspacefiles.Service,
 	history *servicegithistory.Service,
-	ide *serviceworkspaceide.Service,
 ) *ChatHandler {
 	return &ChatHandler{
 		chats:   chats,
@@ -41,13 +40,20 @@ func NewChatHandler(
 		auth:    auth,
 		files:   files,
 		history: history,
-		ide:     ide,
 	}
 }
 
-func (h *ChatHandler) WithSchedules(schedules *ScheduleHandler) *ChatHandler {
-	h.schedules = schedules
+// WithAudit records the workspace actions this handler owns directly: file
+// downloads, archive downloads, and git checkouts.
+func (h *ChatHandler) WithAudit(recorder serviceaudit.Recorder) *ChatHandler {
+	h.audit = recorder
 	return h
+}
+
+// auditWorkspaceTarget labels a workspace action by the chat it came through,
+// keeping the project id in meta so a query can pivot either way.
+func auditWorkspaceTarget(meta servicechat.Meta) serviceaudit.Target {
+	return serviceaudit.Target{Type: serviceaudit.TargetChat, ID: string(meta.ID), Name: meta.Title}
 }
 
 func (h *ChatHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -124,18 +130,10 @@ func (h *ChatHandler) HandleResource(w http.ResponseWriter, r *http.Request) {
 			h.handleMarkRead(w, r, id)
 		case "unread":
 			h.handleMarkUnread(w, r, id)
-		case "ide-open":
-			h.handleIDEOpen(w, r, meta)
 		case "media-open":
 			h.handleMediaOpen(w, r, meta)
-		case "files":
-			h.handleFilesList(w, r, meta)
-		case "files/search":
-			h.handleFilesSearch(w, r, meta)
 		case "files/download":
 			h.handleFilesDownload(w, r, meta)
-		case "files/download-folder":
-			h.handleFilesDownloadFolder(w, r, meta)
 		case "history/repos":
 			h.handleHistoryRepos(w, r, meta)
 		case "history/commits":
@@ -144,12 +142,6 @@ func (h *ChatHandler) HandleResource(w http.ResponseWriter, r *http.Request) {
 			h.handleHistoryDiff(w, r, meta)
 		case "history/checkout":
 			h.handleHistoryCheckout(w, r, meta)
-		case "schedules":
-			if h.schedules == nil {
-				httptransport.SendErr(w, http.StatusNotFound, "not found")
-				return
-			}
-			h.schedules.HandleChatCollection(w, r, meta, email, isAdmin)
 		default:
 			httptransport.SendErr(w, http.StatusNotFound, "not found")
 		}
@@ -309,19 +301,6 @@ func (h *ChatHandler) handleMarkUnread(w http.ResponseWriter, r *http.Request, i
 	httptransport.SendJSON(w, http.StatusOK, meta)
 }
 
-func (h *ChatHandler) handleIDEOpen(w http.ResponseWriter, r *http.Request, meta servicechat.Meta) {
-	if r.Method != http.MethodGet {
-		httptransport.SendErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	redirectURL, err := h.ide.OpenURL(meta.Cwd, r.URL.Query().Get("path"))
-	if err != nil {
-		httptransport.SendErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	http.Redirect(w, r, redirectURL, http.StatusFound)
-}
-
 func (h *ChatHandler) handleMediaOpen(w http.ResponseWriter, r *http.Request, meta servicechat.Meta) {
 	if r.Method != http.MethodGet {
 		httptransport.SendErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -387,6 +366,8 @@ func int64Query(r *http.Request, key string, fallback int64) int64 {
 
 func sendChatError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, permission.ErrDenied), errors.Is(err, permission.ErrActorRequired):
+		httptransport.SendErr(w, http.StatusForbidden, "permission denied")
 	case errors.Is(err, servicechat.ErrInvalidID),
 		errors.Is(err, servicechat.ErrInvalidProvider),
 		errors.Is(err, servicechat.ErrInvalidTmuxSession),

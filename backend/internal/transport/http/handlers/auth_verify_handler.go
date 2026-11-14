@@ -2,6 +2,7 @@ package httphandlers
 
 import (
 	"errors"
+	"github.com/futrx-com/remote.futrx.com/internal/rbac"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -29,19 +30,27 @@ func (h *authVerifyHandler) verify(w http.ResponseWriter, r *http.Request) {
 	matchedSlug, matchedPort := h.matchPreviewHost(host)
 
 	// Only the preview host class can be authorized by a public share link.
-	// The IDE hosts and the main application never reach this branch, because
-	// matchPreviewHost leaves the slug empty for them. It runs before the
-	// session check so that a member who opens a share URL themselves also
-	// gets the token stripped from it rather than forwarding it into the
-	// project's own request logs.
-	if matchedSlug != "" && h.authorizeShare(w, r, matchedSlug, matchedPort) {
+	// It runs before the session check so that a member who opens a share
+	// URL themselves also gets the token stripped from it rather than
+	// forwarding it into the project's own request logs.
+	if matchedSlug != "" && previewCapability(matchedPort) == "" && h.authorizeShare(w, r, matchedSlug, matchedPort) {
 		return
 	}
-
-	err := h.access.Verify(r.Context(), httptransport.SessionCookieValue(r), matchedSlug)
-	if err == nil {
+	if h.verifySession(w, r, matchedSlug) {
 		w.WriteHeader(http.StatusOK)
-		return
+	}
+}
+
+func (h *authVerifyHandler) verifySession(w http.ResponseWriter, r *http.Request, matchedSlug string) bool {
+	var err error
+	_, port := h.matchPreviewHost(strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))))
+	if capability := previewCapability(port); capability != "" {
+		err = h.access.VerifyWorkspace(r.Context(), httptransport.SessionCookieValue(r), matchedSlug, capability)
+	} else {
+		err = h.access.Verify(r.Context(), httptransport.SessionCookieValue(r), matchedSlug)
+	}
+	if err == nil {
+		return true
 	}
 
 	switch {
@@ -49,12 +58,13 @@ func (h *authVerifyHandler) verify(w http.ResponseWriter, r *http.Request) {
 		h.redirectToLogin(w, r)
 	case errors.Is(err, serviceauth.ErrProjectNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, serviceauth.ErrProjectAccessDenied),
+	case errors.Is(err, rbac.ErrDenied), errors.Is(err, rbac.ErrActorRequired), errors.Is(err, serviceauth.ErrProjectAccessDenied),
 		errors.Is(err, serviceauth.ErrAccountNotAuthorized):
 		http.Error(w, err.Error(), http.StatusForbidden)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+	return false
 }
 
 // matchPreviewHost resolves a forwarded host to the project slug and port
@@ -87,4 +97,18 @@ func (h *authVerifyHandler) redirectToLogin(w http.ResponseWriter, r *http.Reque
 		loginURL += "?return_to=" + url.QueryEscape(returnTo)
 	}
 	http.Redirect(w, r, loginURL, http.StatusFound)
+}
+
+func previewCapability(port int) string {
+	switch port {
+	case 8842:
+		return "ide"
+	case 8843:
+		return "terminal"
+	case 8844:
+		return "files"
+	case 6080, 9222:
+		return "browser"
+	}
+	return ""
 }

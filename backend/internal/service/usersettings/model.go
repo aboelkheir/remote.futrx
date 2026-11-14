@@ -48,6 +48,7 @@ const (
 	ChatProviderClaude      = agent.ProviderClaude
 	ChatProviderCodex       = agent.ProviderCodex
 	ChatProviderMiniMax     = agent.ProviderMiniMax
+	ChatProviderOpenCode    = agent.ProviderOpenCode
 	ChatProviderKimi        = agent.ProviderKimi
 	ChatProviderAntigravity = agent.ProviderAntigravity
 )
@@ -86,6 +87,7 @@ const (
 
 type Chat struct {
 	Provider        ChatProvider    `json:"provider"`
+	AccountID       string          `json:"accountId"`
 	Model           string          `json:"model"`
 	Mode            ChatMode        `json:"mode"`
 	ReasoningEffort ReasoningEffort `json:"reasoningEffort"`
@@ -106,6 +108,7 @@ type AppearanceUpdate struct {
 
 type ChatUpdate struct {
 	Provider        *ChatProvider    `json:"provider,omitempty"`
+	AccountID       *string          `json:"accountId,omitempty"`
 	Model           *string          `json:"model,omitempty"`
 	Mode            *ChatMode        `json:"mode,omitempty"`
 	ReasoningEffort *ReasoningEffort `json:"reasoningEffort,omitempty"`

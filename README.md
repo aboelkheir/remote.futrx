@@ -8,7 +8,7 @@
 
 <p align="center">
   Run Codex, MiniMax, Claude Code, Kimi, and Antigravity in separate, always-on Linux workspaces on your own server.
-  Use everything from one browser: chat, IDE, terminal, files, Git, live previews, and a shared browser.
+  Use everything from one browser: chat, terminal, files, Git, live previews, and a shared browser.
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
   ·
   <a href="#quick-start"><strong>Install</strong></a>
   ·
-  <a href="https://github.com/futrx-com/remote.futrx.com/issues"><strong>Roadmap</strong></a>
+  <a href="https://github.com/futrx-com/remote.futrx/issues"><strong>Roadmap</strong></a>
 </p>
 
 ![Remote showing an AI conversation beside a live application preview](docs/assets/readme/feature-live-preview.webp)
@@ -46,13 +46,13 @@ for Remote to discover and preview.
 
 <table>
   <tr>
-    <td width="50%" valign="top">
+    <td width="33%" valign="top">
       <img src="docs/assets/readme/feature-create-project.webp" alt="Creating a new isolated project in Remote">
       <br>
       <strong>Isolated project computers</strong><br>
       Name a project and Remote prepares its durable workspace, container, ports, and provider homes.
     </td>
-    <td width="50%" valign="top">
+    <td width="33%" valign="top">
       <img src="docs/assets/readme/feature-agent-chat.webp" alt="A completed Codex run in a Remote project chat">
       <br>
       <strong>Durable agent conversations</strong><br>
@@ -73,7 +73,7 @@ mark it read or unread, fork its history, or delete it.
 
 <table>
   <tr>
-    <td width="50%" valign="top">
+    <td width="33%" valign="top">
       <img src="docs/assets/readme/feature-model-picker.webp" alt="Remote provider and model picker showing Codex, Claude, MiniMax, Kimi, and Antigravity">
       <br>
       <strong>Five agent integrations</strong><br>
@@ -119,21 +119,13 @@ controls switch ports, resize or reload the pane, and open the app in a new tab.
       <img src="docs/assets/readme/feature-files.webp" alt="Remote workspace file browser showing the demo project files">
       <br>
       <strong>Files without leaving the chat</strong><br>
-      Browse a lazy-loaded tree, search by filename, download files or folders, preview supported media, and open source files in the IDE.
+      Browse a lazy-loaded tree, search by filename, download files or folders, preview supported media, and use an installed application's file opener when available.
     </td>
-    <td width="50%" valign="top">
-      <img src="docs/assets/readme/feature-ide.webp" alt="Orbit Tasks source code open in Remote's browser IDE">
-      <br>
-      <strong>A complete browser IDE</strong><br>
-      Every project includes code-server rooted at the same durable workspace the agents use.
-    </td>
-  </tr>
-  <tr>
     <td width="50%" valign="top">
       <img src="docs/assets/readme/feature-terminal.webp" alt="Remote container terminal verifying Git commits and a running service">
       <br>
       <strong>A live container terminal</strong><br>
-      Install dependencies, inspect processes, run tests, or take over manually in a resizable terminal attached to the project computer.
+      Install the Terminal application to install dependencies, inspect processes, run tests, or take over manually in a resizable terminal attached to the project computer.
     </td>
     <td width="50%" valign="top">
       <img src="docs/assets/readme/feature-git-history.webp" alt="Remote Git history showing commits and a structured source diff">
@@ -146,14 +138,10 @@ controls switch ports, resize or reload the pane, and open the app in a new tab.
 
 ### Run work later
 
-<p align="center">
-  <img src="docs/assets/readme/feature-scheduled-tasks.webp" alt="Remote scheduled tasks drawer" width="900">
-</p>
-
-Select the Scheduled Tasks skill and ask in normal language for a one-time or
-recurring job. New schedules start paused for human review; the drawer can arm,
-edit, pause, resume, run, inspect, and delete them. Runs return to the same chat
-even when your browser is closed.
+Install the Scheduled Tasks application in a project and ask in normal language
+for a one-time or recurring reminder. Tasks become active immediately and return
+to the same chat even when your browser is closed. The application clock action
+lets you pause, resume, run and delete tasks.
 
 ### Operate and share each project
 
@@ -199,10 +187,10 @@ even when your browser is closed.
       Connect managed providers, review provider-specific setup instructions, and synchronize the appropriate host-managed state into projects.
     </td>
     <td width="50%" valign="top">
-      <img src="docs/assets/readme/feature-usage.webp" alt="Remote token usage and estimated cost dashboard">
+      <img src="docs/assets/readme/feature-usage.webp" alt="Remote token usage dashboard">
       <br>
-      <strong>Usage and estimated cost</strong><br>
-      Compare tokens, runs, active projects, and estimated cost by project, user, provider, model, or day.
+      <strong>Usage and plan limits</strong><br>
+      Compare tokens, runs, and active projects by project, user, provider, model, or day, and see each subscription account's current plan limits.
     </td>
   </tr>
   <tr>
@@ -216,7 +204,7 @@ even when your browser is closed.
       <img src="docs/assets/readme/feature-notifications.webp" alt="Remote per-device notification settings">
       <br>
       <strong>Push notifications</strong><br>
-      Opt in per device for agent questions, completed or failed runs, and scheduled-task results while you are away.
+      Opt in per device for agent questions, completed or failed runs, and application results while you are away.
     </td>
   </tr>
   <tr>
@@ -250,10 +238,10 @@ See the continuous five-step product tour at [remote.futrx.com](https://remote.f
 - **One project computer per project** — an unprivileged LXC container with durable files and agent homes.
 - **Your choice of agent** — use Codex, MiniMax, Claude Code, Kimi, or Antigravity with provider-specific models, thinking, speed, mode, approval, and sandbox controls where supported.
 - **Durable, inspectable conversations** — stream Markdown, reasoning, tools, questions, errors, and usage; queue, cancel, rewind, fork, mark unread, or continue later.
-- **A complete development surface** — chat, browser IDE, root terminal, files, uploads, Git history, structured diffs, and reusable skills.
+- **A complete development surface** — chat, files, uploads, Git history, structured diffs, reusable skills, and optional terminal and editor applications.
 - **Live applications** — Remote finds listening ports, creates project URLs, adds HTTPS, and shows the app beside the conversation.
 - **A browser agents and humans can share** — reuse authenticated sessions, let an agent browse visually, watch it work, or take over.
-- **Scheduled work** — create reviewed one-time or recurring prompts that run later, even when your browser is closed.
+- **Scheduled work** — install Scheduled Tasks and create one-time or recurring prompts that run later, even when your browser is closed.
 - **Controls outside the workspace** — manage access, secrets, CPU, memory, lifecycle, provider connections, usage, notifications, security, updates, and recovery from the Remote host.
 
 ## How it works
@@ -263,7 +251,7 @@ flowchart LR
     A["You<br>any browser"] --> B["Remote host<br>identity, routing, lifecycle"]
     B --> C["Project computer<br>one unprivileged LXC container"]
     C --> D["Codex · MiniMax · Claude · Kimi · Antigravity"]
-    C --> E["IDE · terminal · Git · files"]
+    C --> E["Terminal · Git · files · optional editors"]
     C --> F["Browser · apps · HTTPS previews"]
 ```
 
@@ -291,9 +279,8 @@ Every project gets its own HTTPS address, so Remote needs a hostname with wildca
 | DNS name | Purpose |
 | --- | --- |
 | `remote.example.com` | Remote web app |
-| `code.remote.example.com` | Browser IDE |
-| `*.code.remote.example.com` | Per-project browser IDEs |
 | `*.dev.remote.example.com` | Per-project application previews |
+| `*.remote.example.com` | Installed project applications at `<label>--<project>` |
 
 **If you want a free hostname,** [DuckDNS](https://www.duckdns.org) is the quickest, because it resolves every subdomain automatically and there are no DNS records to create:
 
@@ -303,7 +290,7 @@ Every project gets its own HTTPS address, so Remote needs a hostname with wildca
 
 Then install using `yourname.duckdns.org` as the hostname.
 
-[deSEC](https://desec.io) is a good alternative, run by a non-profit and less likely to be filtered on corporate networks. It is a full DNS host rather than a wildcard service, so create the four records from the table above under your `yourname.dedyn.io` name.
+[deSEC](https://desec.io) is a good alternative, run by a non-profit and less likely to be filtered on corporate networks. It is a full DNS host rather than a wildcard service, so create the records from the table above under your `yourname.dedyn.io` name.
 
 > [!NOTE]
 > Free dynamic-DNS providers are community-run with no uptime guarantee, and some corporate networks block all of `*.duckdns.org` because of unrelated abuse elsewhere on it. If a preview link refuses to open at the office, that is usually why, and a domain you own avoids it.
@@ -320,24 +307,40 @@ curl -fsSL https://remote.futrx.com/get | sudo bash -s -- remote.example.com
 
 Replace `remote.example.com` with the hostname you set up above. The installer downloads Remote, installs its dependencies, builds the workspace image, starts the services, and enables HTTPS.
 
+#### Pseudonymous version telemetry
+
+Starting with `0.21.0`, Remote reports its version once after installation or a
+version change, then at most weekly. The payload is only the version and a
+random, stable installation ID; the collector adds a receipt timestamp and
+retains reports for three months. No hostname, user, project, provider, chat,
+prompt, source code, or resource data is sent. `dev` and `qa-*` builds do not
+report, and pre-`0.21.0` installations are not counted.
+
+See [Deployment and operations](docs/04-operations/09-deployment-and-operations.md#pseudonymous-version-telemetry)
+for cadence and counting limitations.
+
 ### 3. Create your first project
 
 1. When Remote starts for the first time, it prints a one-time setup link to
    the server's log. To see it, connect to the server and run:
    `journalctl -u remote --since "-10 min" | grep -A2 "first-time setup"`.
    The link looks like `https://remote.example.com/?token=...` and works for
-   30 minutes. If it has expired or you lost it, run `remote setup-token` on
-   the server to print a fresh one.
+   30 minutes. If it has expired or you lost it, run `sudo remote setup-token` on
+   the server to print a fresh one. The setup data is root-owned; omit
+   `sudo` if you are already root.
 2. Open that link in your browser and create your administrator account —
    this is the login you'll use to manage the server. Only someone who can
    read that link on the server (not just visit the page) can do this, so a
    stranger who finds the URL cannot claim the server before you do.
 3. Open **Settings → Agents** and connect Codex, Claude Code, or Kimi.
 4. Select **New project**.
-5. To use MiniMax, open **Settings → Agents**, choose the MiniMax sign-in action, and save a Token Plan subscription key. Pay-as-you-go MiniMax API keys are not supported.
+5. To use MiniMax, open **Settings → Agents**, add a named MiniMax account, and save its Token Plan subscription key. Pay-as-you-go MiniMax API keys are not supported.
 6. Start a chat and describe what you want in normal language.
+7. To send email from this server, open **Settings → Email** and choose the Gmail preset
+   (address plus an app password; the Google account needs 2-Step Verification
+   enabled to generate a 16-character app password) or configure a custom SMTP server.
 
-Remote will show the agent's progress. When the work is ready, review it in the chat, IDE, terminal, file manager, Git history, or live preview.
+Remote will show the agent's progress. When the work is ready, review it in the chat, terminal, file manager, Git history, live preview, or an installed editor.
 
 ## Security in plain language
 
@@ -351,6 +354,10 @@ Remote is designed to reduce the blast radius of agent work, not to promise an a
 Before using Remote with valuable code or credentials, read the [threat model](docs/threat-model.md), [known limitations](docs/known-limitations.md), and [security policy](SECURITY.md).
 
 ## Updating
+
+Administrator workspaces check for new releases on opening and hourly while
+visible. An **Update available** notice in the sidebar opens **Settings → Updates**
+to read its release notes and install the release. Checking for a release never installs it automatically.
 
 The in-app updater selects the deployment path from the release version:
 patch releases rebuild and restart only the frontend/backend application,
@@ -371,7 +378,7 @@ The full updater preserves project files and provider homes. Coordinate a mainte
 - [System architecture](ARCHITECTURE.md) — components, data flow, and trust boundaries
 - [Project philosophy](docs/01-overview/00-philosophy.md) — why Remote treats each project as a computer
 - [Contributing](CONTRIBUTING.md) — local development and contribution workflow
-- [Issue tracker](https://github.com/futrx-com/remote.futrx.com/issues) — bugs, ideas, and roadmap
+- [Issue tracker](https://github.com/futrx-com/remote.futrx/issues) — bugs, ideas, and roadmap
 
 ## License
 

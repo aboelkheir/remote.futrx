@@ -37,6 +37,11 @@ type Runtime interface {
 	Restart(ctx context.Context, containerName string) error
 	Delete(ctx context.Context, containerName string) error
 	State(ctx context.Context, containerName string) (serviceproject.ContainerState, error)
+	// StorageSpace reports the pool new containers are created in, with its
+	// free and total bytes.
+	StorageSpace(ctx context.Context) (pool string, free, total uint64, err error)
+	// ImageSize reports the size in bytes of the image an alias points to.
+	ImageSize(ctx context.Context, alias string) (uint64, error)
 }
 
 type WorkspacePreparer interface {
@@ -49,7 +54,7 @@ type ResourceEnsurer interface {
 }
 
 type LaunchProvisioner interface {
-	Provision(ctx context.Context, containerName, displayName string)
+	Provision(ctx context.Context, containerName, displayName, projectSlug string)
 }
 
 type ProfileSource interface {
@@ -261,9 +266,10 @@ func (s *Service) Ensure(ctx context.Context, project serviceproject.Meta) error
 			return retryErr
 		}
 	}
-	if created || len(changes) > 0 {
-		s.provisioner.Provision(ctx, project.ContainerName, project.Name)
-	}
+	// Reconcile launch-time capabilities for existing containers too. This is
+	// what lets fleet-wide additions (such as preview URL configuration) reach
+	// old workspaces without deleting or recreating them.
+	s.provisioner.Provision(ctx, project.ContainerName, project.Name, project.Slug)
 	return nil
 }
 

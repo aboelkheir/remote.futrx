@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"regexp"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/futrx-com/remote.futrx.com/internal/agent"
 	serviceproject "github.com/futrx-com/remote.futrx.com/internal/service/project"
 )
 
@@ -56,6 +58,64 @@ func (r *recordingRunner) RunStdin(ctx context.Context, _ io.Reader, args ...str
 	return r.Run(ctx, args...)
 }
 
+type deadlineRunner struct {
+	recordingRunner
+	deadline time.Time
+	ctxErr   error
+}
+
+func (r *deadlineRunner) Run(ctx context.Context, args ...string) (string, error) {
+	r.deadline, _ = ctx.Deadline()
+	r.ctxErr = ctx.Err()
+	return r.recordingRunner.Run(ctx, args...)
+}
+
+func TestInitUsesConfiguredTimeout(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		configured time.Duration
+		want       time.Duration
+	}{
+		{name: "default", want: 10 * time.Minute},
+		{name: "negative falls back", configured: -time.Minute, want: 10 * time.Minute},
+		{name: "longer unpack", configured: 20 * time.Minute, want: 20 * time.Minute},
+		{name: "shorter unpack", configured: 30 * time.Second, want: 30 * time.Second},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &deadlineRunner{}
+			client := NewClient(runner, tt.configured)
+			before := time.Now()
+			if err := client.Init(context.Background(), "local:base", "project-1"); err != nil {
+				t.Fatal(err)
+			}
+			after := time.Now()
+			if runner.deadline.Before(before.Add(tt.want)) || runner.deadline.After(after.Add(tt.want)) {
+				t.Fatalf("init deadline = %s, want a %s timeout", runner.deadline, tt.want)
+			}
+			assertArgv(t, runner.calls, [][]string{{"init", "local:base", "project-1"}})
+		})
+	}
+}
+
+func TestInitPreservesCallerDeadlineAndCancellation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	wantDeadline, _ := ctx.Deadline()
+	runner := &deadlineRunner{}
+	client := NewClient(runner, 20*time.Minute)
+	if err := client.Init(ctx, "local:base", "project-1"); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.deadline.Equal(wantDeadline) {
+		t.Fatalf("init deadline = %s, want caller deadline %s", runner.deadline, wantDeadline)
+	}
+	cancel()
+	_ = client.Init(ctx, "local:base", "project-1")
+	if !errors.Is(runner.ctxErr, context.Canceled) {
+		t.Fatalf("runner context error = %v, want context.Canceled", runner.ctxErr)
+	}
+}
+
 func TestClientStateMapsLXCOutput(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -84,7 +144,7 @@ func TestClientStateMapsLXCOutput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := &recordingRunner{available: tt.available, responses: []runnerResponse{tt.response}}
-			got, err := NewClient(runner).State(context.Background(), "c1")
+			got, err := NewClient(runner, 0).State(context.Background(), "c1")
 
 			if got != tt.want {
 				t.Fatalf("State() state = %q, want %q", got, tt.want)
@@ -104,7 +164,7 @@ func TestClientReadsLocalDiskDeviceFromLXDQuery(t *testing.T) {
 	runner := &recordingRunner{available: true, responses: []runnerResponse{{out: `{
         "devices":{"workspace":{"type":"disk","source":"/host/project","path":"/workspace"}}
     }`}}}
-	source, path, exists, err := NewClient(runner).Disk(context.Background(), "project-1", "workspace")
+	source, path, exists, err := NewClient(runner, 0).Disk(context.Background(), "project-1", "workspace")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +180,7 @@ func TestClientPullDirectoryTreatsMissingProviderHomeAsEmpty(t *testing.T) {
 			runner := &recordingRunner{available: true, responses: []runnerResponse{{
 				out: output, err: errors.New("exit 1"),
 			}}}
-			pulled, err := NewClient(runner).PullDirectory(context.Background(), "project-1", "/root/.kimi-code", "/host/staging")
+			pulled, err := NewClient(runner, 0).PullDirectory(context.Background(), "project-1", "/root/.kimi-code", "/host/staging")
 			if err != nil || pulled {
 				t.Fatalf("PullDirectory() = %t, %v", pulled, err)
 			}
@@ -133,11 +193,44 @@ func TestClientPullDirectoryTreatsMissingProviderHomeAsEmpty(t *testing.T) {
 
 func TestClientMountedDistinguishesAnOrdinaryDirectory(t *testing.T) {
 	runner := &recordingRunner{available: true, responses: []runnerResponse{{err: errors.New("exit 1")}}}
-	mounted, err := NewClient(runner).Mounted(context.Background(), "project-1", "/workspace")
+	mounted, err := NewClient(runner, 0).Mounted(context.Background(), "project-1", "/workspace")
 	if err != nil || mounted {
 		t.Fatalf("Mounted() = %t, %v", mounted, err)
 	}
 	assertArgv(t, runner.calls, [][]string{{"exec", "project-1", "--", "mountpoint", "-q", "/workspace"}})
+}
+
+func TestBusyProcessPatternMatchesOnlyMarkedAgentForContainer(t *testing.T) {
+	pattern := regexp.MustCompile(busyProcessPattern("project-1"))
+	tests := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{
+			name: "marked claude invocation",
+			command: "/snap/lxd/current/bin/lxc exec --cwd /workspace --env " +
+				agent.ContainerAgentProcessMarker + " --env HOME=/root project-1 -- claude -p",
+			want: true,
+		},
+		{
+			name:    "ordinary maintenance command",
+			command: "/snap/lxd/current/bin/lxc exec project-1 -- git -C /workspace remote get-url origin",
+		},
+		{
+			name: "marked invocation for another container",
+			command: "/snap/lxd/current/bin/lxc exec --cwd /workspace --env " +
+				agent.ContainerAgentProcessMarker + " project-10 -- claude -p",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pattern.MatchString(tt.command); got != tt.want {
+				t.Fatalf("pattern match = %t, want %t for %q", got, tt.want, tt.command)
+			}
+		})
+	}
 }
 
 func TestClientLifecycleCommandsAndErrorMappings(t *testing.T) {
@@ -368,7 +461,7 @@ func TestClientLifecycleCommandsAndErrorMappings(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := &recordingRunner{available: tt.available, responses: tt.responses}
-			err := tt.invoke(NewClient(runner))
+			err := tt.invoke(NewClient(runner, 0))
 			assertError(t, err, tt.wantErr)
 			assertArgv(t, runner.calls, tt.wantCalls)
 		})
@@ -380,7 +473,7 @@ func TestClientDeleteReconcilesACompletedDeleteAfterClientTimeout(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 
-	if err := NewClient(runner).Delete(ctx, "project-1"); err != nil {
+	if err := NewClient(runner, 0).Delete(ctx, "project-1"); err != nil {
 		t.Fatalf("Delete() error = %v, want completed daemon delete to succeed", err)
 	}
 	assertArgv(t, runner.calls, [][]string{

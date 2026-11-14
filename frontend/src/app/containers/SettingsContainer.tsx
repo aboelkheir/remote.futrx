@@ -1,33 +1,62 @@
 import { useCallback, useState } from "preact/hooks";
+import { createPermissionAdministration } from "../permissions";
+import { createAuditLog } from "../audit";
 import {
   SettingsPage,
   type SettingsTab,
 } from "../../ui/settings/SettingsPage";
+import { useWorkspaceContext } from "../../state/context/WorkspaceContext";
 import { useAuthContext } from "../../state/context/AuthContext";
 import { useUserSettingsContext } from "../../state/context/UserSettingsContext";
 import { useUserDirectory } from "../../state/hooks/users/useUserDirectory";
+import { usePermissionAdministration } from "../../state/hooks/permissions/usePermissionAdministration";
+import { useAuditLog } from "../../state/hooks/admin/useAuditLog";
 import { useSecuritySettings } from "../../state/hooks/auth/useSecuritySettings";
 import { useServerInfo } from "../../state/hooks/server/useServerInfo";
-import { useSelfUpdate } from "../../state/hooks/server/useSelfUpdate";
+import type { SelfUpdateController } from "../../state/hooks/server/useSelfUpdate";
+import { useReleaseNotes } from "../../state/hooks/server/useReleaseNotes";
 import { usePushNotifications } from "../../state/hooks/push/usePushNotifications";
 import { useUsageDashboard } from "../../state/hooks/usage/useUsageDashboard";
 import { usageApi } from "../../api/usageApi";
+import { useGlobalApplications } from "../../state/hooks/applications/useApplications";
+import { extensionHost } from "../extensions/extensionHost";
 
 export function SettingsContainer({
+  selfUpdate,
   onBack,
   onHamburger,
+  activeTab,
+  onTabChange,
 }: {
+  selfUpdate: SelfUpdateController;
   onBack: () => void;
   onHamburger: () => void;
+  activeTab: SettingsTab;
+  onTabChange: (tab: SettingsTab) => void;
 }) {
   const { auth } = useAuthContext();
+  const { projects } = useWorkspaceContext();
   const userSettings = useUserSettingsContext();
   const userDirectory = useUserDirectory(auth.isAdmin);
-  const [activeTab, setActiveTab] = useState<SettingsTab>("appearance");
   const serverInfo = useServerInfo(activeTab === "info");
-  const selfUpdate = useSelfUpdate(activeTab === "updates" && auth.isAdmin);
+  const [auditLogDependencies] = useState(createAuditLog);
+  const auditLog = useAuditLog(activeTab === "audit" && auth.isAdmin, auditLogDependencies);
+  const releaseNotes = useReleaseNotes(
+    activeTab === "updates" && auth.isAdmin && !selfUpdate.status?.lastCheck?.error,
+    selfUpdate.status?.lastCheck?.latestTag,
+  );
   const security = useSecuritySettings(activeTab === "security");
-  const usageDashboard = useUsageDashboard(activeTab === "usage");
+  const [permissionAdministration] = useState(createPermissionAdministration);
+  const permissions = usePermissionAdministration(
+    (activeTab === "permissions" || activeTab === "users") && auth.isAdmin,
+    permissionAdministration,
+  );
+  const applications = useGlobalApplications({
+    enabled: activeTab === "applications" && auth.isAdmin,
+    managesPackages: auth.isAdmin,
+    onApplicationsSettled: extensionHost.sync,
+  });
+  const usageDashboard = useUsageDashboard(activeTab === "usage" && auth.isAdmin);
   const [usageRebuilding, setUsageRebuilding] = useState(false);
   const [usageRebuildMessage, setUsageRebuildMessage] = useState<string | null>(null);
 
@@ -48,7 +77,10 @@ export function SettingsContainer({
       setUsageRebuilding(false);
     }
   }, [usageDashboard]);
-  const push = usePushNotifications(activeTab === "notifications");
+  const push = usePushNotifications(
+    activeTab === "notifications",
+    auth.email || auth.adminEmail
+  );
 
   return (
     <SettingsPage
@@ -61,12 +93,14 @@ export function SettingsContainer({
       serverInfoRefreshing={serverInfo.refreshing}
       serverInfoError={serverInfo.error}
       selfUpdate={selfUpdate.status}
+      releaseNotes={releaseNotes}
       selfUpdateLoading={selfUpdate.loading}
       selfUpdateChecking={selfUpdate.checking}
       selfUpdateApplying={selfUpdate.applying}
       selfUpdateRestarting={selfUpdate.restarting}
       selfUpdateError={selfUpdate.error}
       userDirectory={userDirectory}
+      auditLog={auditLog}
       usageDashboard={usageDashboard}
       usageRebuilding={usageRebuilding}
       usageRebuildMessage={usageRebuildMessage}
@@ -78,12 +112,15 @@ export function SettingsContainer({
       push={push}
       onBack={onBack}
       onHamburger={onHamburger}
-      onTabChange={setActiveTab}
+      onTabChange={onTabChange}
       onRefreshServerInfo={serverInfo.refresh}
       onCheckForUpdates={selfUpdate.check}
       onApplyUpdate={selfUpdate.apply}
       onAppearanceThemeChange={(theme) => void userSettings.setTheme(theme)}
       security={security}
+      applications={applications}
+      permissions={permissions}
+      projects={projects}
     />
   );
 }

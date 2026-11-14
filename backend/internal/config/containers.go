@@ -3,11 +3,11 @@ package config
 import (
 	"github.com/futrx-com/remote.futrx.com/internal/agent/provisioning"
 	configconstants "github.com/futrx-com/remote.futrx.com/internal/config/constants"
+	containerapplications "github.com/futrx-com/remote.futrx.com/internal/integration/containers/applications"
 	"github.com/futrx-com/remote.futrx.com/internal/integration/containers/assets"
 	containerbaseimage "github.com/futrx-com/remote.futrx.com/internal/integration/containers/baseimage"
 	containerbrowser "github.com/futrx-com/remote.futrx.com/internal/integration/containers/browser"
 	containercli "github.com/futrx-com/remote.futrx.com/internal/integration/containers/cli"
-	containercodeserver "github.com/futrx-com/remote.futrx.com/internal/integration/containers/codeserver"
 	"github.com/futrx-com/remote.futrx.com/internal/integration/containers/command"
 	containercredentials "github.com/futrx-com/remote.futrx.com/internal/integration/containers/credentials"
 	containerenvironment "github.com/futrx-com/remote.futrx.com/internal/integration/containers/environment"
@@ -17,7 +17,7 @@ import (
 	containernetwork "github.com/futrx-com/remote.futrx.com/internal/integration/containers/network"
 	containerresources "github.com/futrx-com/remote.futrx.com/internal/integration/containers/resources"
 	containerruntimeassets "github.com/futrx-com/remote.futrx.com/internal/integration/containers/runtimeassets"
-	containerscheduletools "github.com/futrx-com/remote.futrx.com/internal/integration/containers/scheduletools"
+	containerusersetup "github.com/futrx-com/remote.futrx.com/internal/integration/containers/usersetup"
 	containerworkspace "github.com/futrx-com/remote.futrx.com/internal/integration/containers/workspace"
 	"github.com/futrx-com/remote.futrx.com/internal/integration/hostfs"
 	servicebrowser "github.com/futrx-com/remote.futrx.com/internal/service/container/browser"
@@ -42,12 +42,14 @@ type ContainerStack struct {
 	Environment   *containerenvironment.Client
 	CLI           *servicecli.Provisioner
 	Browser       *servicebrowser.Service
-	ScheduleTools *containerscheduletools.Adapter
 	Listeners     *containerlisteners.Scanner
 	Network       *containernetwork.Repairer
 	Workspace     *containerworkspace.Provisioner
 	RuntimeAssets *containerruntimeassets.Adapter
 	Images        *serviceimage.Builder
+	AppInstaller  *containerapplications.Installer
+	AppPorts      *containerapplications.HostPortAllocator
+	UserSetup     *containerusersetup.Provisioner
 }
 
 // ContainerStackOptions supplies presentation and installation-specific
@@ -55,6 +57,16 @@ type ContainerStack struct {
 type ContainerStackOptions struct {
 	AgentInstructions  []byte
 	ImageBuildProgress serviceimage.ProgressReporter
+	// AppRegistry is the installable-application catalog. When non-nil the stack
+	// builds the application installer/port-allocator over the same lxc runner.
+	AppRegistry *containerapplications.Registry
+	// DataDir is the server's state directory. An application that needs a host-side
+	// executable has it installed beneath this directory, never into the host's
+	// own package set.
+	DataDir        string
+	PublicHostname string
+	GitUserName    string
+	GitUserEmail   string
 }
 
 // ProjectDependencies exposes only the capabilities consumed by project
@@ -68,6 +80,7 @@ func (s ContainerStack) ProjectDependencies() serviceproject.ContainerDependenci
 		Network:     s.Network,
 		Listeners:   s.Listeners,
 		Browser:     s.Browser,
+		Setup:       s.UserSetup,
 	}
 }
 
@@ -80,7 +93,6 @@ func (s ContainerStack) AgentDependencies() provisioning.ContainerDependencies {
 		Workspace:     s.Workspace,
 		RuntimeAssets: s.RuntimeAssets,
 		Browser:       s.Browser,
-		ScheduleTools: s.ScheduleTools,
 		Lifecycle:     s.Lifecycle,
 	}
 }
@@ -105,32 +117,32 @@ func NewContainerStack(
 		Runtime:     browserAdapter,
 		Tooling:     browserAdapter,
 	}, configconstants.ProjectPreviewAgentBrowserPort)
-	codeServer := containercodeserver.NewProvisioner(runner)
-	scheduleTools := containerscheduletools.NewAdapter(runner, publisher)
 	workspace := containerworkspace.NewProvisioner(
 		runner,
 		profiles,
 		publisher,
 		options.AgentInstructions,
+		containerworkspace.GitIdentity{Name: options.GitUserName, Email: options.GitUserEmail},
 	)
 	runtimeAssets := containerruntimeassets.NewAdapter(runner, publisher)
 	images := serviceimage.NewBuilder(
 		containerbaseimage.NewClient(runner),
 		profiles,
 		containerbrowser.InstallScript(),
-		containercodeserver.InstallScript(),
 		options.ImageBuildProgress,
 	)
 	launchProvisioner := containerlaunch.NewProvisioner(
 		credentials,
 		workspace,
 		browser,
-		codeServer,
-		scheduleTools,
 	)
-	resources := containerresources.NewManager(runner)
+	viteAllowedHost := ""
+	if options.PublicHostname != "" {
+		viteAllowedHost = ".dev." + options.PublicHostname
+	}
+	resources := containerresources.NewManager(runner, viteAllowedHost)
 	lifecycle := servicelifecycle.NewService(
-		containerlifecycle.NewClient(runner),
+		containerlifecycle.NewClient(runner, envDuration("FUTRX_LAUNCH_TIMEOUT", 0)),
 		serviceimage.Alias,
 		hostfs.NewWorkspacePreparer(hostMappedUID, hostMappedUID),
 		resources,
@@ -151,6 +163,14 @@ func NewContainerStack(
 		Credentials:   inspectionAdapter,
 	})
 
+	var appInstaller *containerapplications.Installer
+	var appPorts *containerapplications.HostPortAllocator
+	if options.AppRegistry != nil {
+		appInstaller = containerapplications.NewInstaller(runner, options.AppRegistry, options.DataDir)
+		appInstaller.SetPublicHostname(options.PublicHostname)
+		appPorts = containerapplications.NewHostPortAllocator()
+	}
+
 	return ContainerStack{
 		Lifecycle:     lifecycle,
 		Inspection:    inspection,
@@ -158,11 +178,13 @@ func NewContainerStack(
 		Environment:   environment,
 		CLI:           cli,
 		Browser:       browser,
-		ScheduleTools: scheduleTools,
 		Listeners:     listeners,
 		Network:       network,
 		Workspace:     workspace,
 		RuntimeAssets: runtimeAssets,
 		Images:        images,
+		AppInstaller:  appInstaller,
+		AppPorts:      appPorts,
+		UserSetup:     containerusersetup.NewProvisioner(runner),
 	}
 }

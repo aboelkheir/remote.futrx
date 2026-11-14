@@ -58,6 +58,17 @@ type CredentialFile struct {
 	Mode          string
 	PushRequired  bool
 	PullRequired  bool
+	// PushOnly keeps host-managed credentials authoritative across workspaces.
+	PushOnly bool
+	// HostAuthoritative forces the selected host credential into a container
+	// before each run even when the container copy has a newer timestamp.
+	HostAuthoritative bool
+	Validator         CredentialValidator
+}
+
+// CredentialValidator checks provider credentials locally before syncing them.
+type CredentialValidator interface {
+	Valid([]byte) bool
 }
 
 // CredentialDirectory describes a dynamic directory of credential files.
@@ -84,6 +95,17 @@ type CredentialSpec struct {
 	LegacyDevices []string
 	Directory     *CredentialDirectory
 	SeedOnLaunch  bool
+}
+
+func (s CredentialSpec) Clone() CredentialSpec {
+	s.Files = append([]CredentialFile(nil), s.Files...)
+	s.LegacyDevices = append([]string(nil), s.LegacyDevices...)
+	if s.Directory != nil {
+		directory := *s.Directory
+		directory.ContainerDirs = append([]string(nil), directory.ContainerDirs...)
+		s.Directory = &directory
+	}
+	return s
 }
 
 func (s CredentialSpec) Empty() bool {
@@ -241,14 +263,8 @@ type Profile struct {
 
 func (p Profile) Clone() Profile {
 	p.CLI.VersionArgs = append([]string(nil), p.CLI.VersionArgs...)
-	p.Credentials.Files = append([]CredentialFile(nil), p.Credentials.Files...)
-	p.Credentials.LegacyDevices = append([]string(nil), p.Credentials.LegacyDevices...)
+	p.Credentials = p.Credentials.Clone()
 	p.PersistentState = append([]PersistentDirectory(nil), p.PersistentState...)
-	if p.Credentials.Directory != nil {
-		directory := *p.Credentials.Directory
-		directory.ContainerDirs = append([]string(nil), directory.ContainerDirs...)
-		p.Credentials.Directory = &directory
-	}
 	if p.Instructions != nil {
 		instructions := *p.Instructions
 		p.Instructions = &instructions

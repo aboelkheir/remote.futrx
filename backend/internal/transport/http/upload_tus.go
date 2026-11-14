@@ -13,8 +13,8 @@ package httptransport
 //      finished blob from the chunk temp dir into the chat's workspace cwd
 //      with the proper ownership + mode.
 //
-// Chunks live under <tmpRoot>/chunks (default /var/lib/remote/uploads/tmp);
-// finished files are moved to the chat-resolved cwd. We intentionally do
+// Chunks live in tmpRoot (default /var/lib/remote/uploads/tmp) as <id> plus
+// an <id>.info sidecar; finished files are moved to the chat-resolved cwd. We intentionally do
 // NOT use /tmp — it's tmpfs on this host and would RAM-back multi-GB uploads.
 
 import (
@@ -33,6 +33,7 @@ import (
 	"github.com/tus/tusd/v2/pkg/filestore"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 
+	serviceaudit "github.com/futrx-com/remote.futrx.com/internal/service/audit"
 	servicechat "github.com/futrx-com/remote.futrx.com/internal/service/chat"
 )
 
@@ -68,6 +69,15 @@ type UploadHandler struct {
 	chats   ChatUploadResolver
 	tmpRoot string
 	gate    UploadGate
+	audit   serviceaudit.Recorder
+}
+
+// WithAudit records the creation of an upload. Completion happens
+// asynchronously on a tusd hook with no request context, so the audited moment
+// is the POST that reserves the upload and names the caller.
+func (u *UploadHandler) WithAudit(recorder serviceaudit.Recorder) *UploadHandler {
+	u.audit = recorder
+	return u
 }
 
 func NewUploadHandler(chats ChatUploadResolver, dataDir string) (*UploadHandler, error) {
@@ -148,6 +158,7 @@ func (u *UploadHandler) dispatch(w http.ResponseWriter, r *http.Request) {
 			SendErr(w, http.StatusForbidden, "not a member of this chat's project")
 			return
 		}
+		u.recordUpload(r, chatID, nil)
 	}
 
 	switch r.Method {
@@ -164,6 +175,18 @@ func (u *UploadHandler) dispatch(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (u *UploadHandler) recordUpload(r *http.Request, chatID string, err error) {
+	if u.audit == nil {
+		return
+	}
+	u.audit.Record(r.Context(), serviceaudit.Result(
+		serviceaudit.ActionWorkspaceFileUpload,
+		serviceaudit.Target{Type: serviceaudit.TargetChat, ID: chatID},
+		serviceaudit.Meta{"bytes": r.Header.Get("Upload-Length")},
+		err,
+	))
 }
 
 // chatIDFromUploadMetadata pulls the `chatId` field out of a tus
@@ -201,6 +224,22 @@ func (u *UploadHandler) drainCompletions(events <-chan tusd.HookEvent) {
 	for ev := range events {
 		if err := u.finalize(ev); err != nil {
 			log.Printf("upload[%s] finalize: %v", ev.Upload.ID, err)
+			u.discard(ev.Upload.ID)
+		}
+	}
+}
+
+// discard removes a finished upload's chunk file and .info sidecar. A
+// completed tus upload cannot be resumed, so after a failed finalize nothing
+// else would ever reclaim them.
+func (u *UploadHandler) discard(id string) {
+	if id == "" || filepath.Base(id) != id {
+		return
+	}
+	src := filepath.Join(u.tmpRoot, id)
+	for _, path := range []string{src, src + ".info"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.Printf("upload[%s] discard %s: %v", id, path, err)
 		}
 	}
 }

@@ -3,19 +3,35 @@ package project
 import (
 	"context"
 	"errors"
+	"fmt"
+	permission "github.com/futrx-com/remote.futrx.com/internal/rbac"
+	"github.com/futrx-com/remote.futrx.com/internal/service/workspaceaccess"
 	"log"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/futrx-com/remote.futrx.com/internal/service/audit"
 )
 
 type Service struct {
 	repo               Repository
+	chats              ChatCleanup
 	containerLifecycle ContainerLifecycle
 	containerInspector ContainerInspector
 	containerNetwork   ContainerNetwork
 	containerListeners ContainerListeners
+	containerSetup     ContainerSetup
+	audit              audit.Recorder
+
+	// authorizer guards the entry points that carry a project permission.
+	authorizer Authorizer
+
+	// requireLifecycle and requireAccess are the bound permission checks. They
+	// are built in New after options, so they capture the final authorizer.
+	requireLifecycle projectAuthorizer
+	requireAccess    projectAuthorizer
 
 	// access owns per-project membership and email normalization.
 	access *accessList
@@ -32,7 +48,15 @@ type Service struct {
 	// image) is relaunched exactly once even under concurrent prompts. It also
 	// keeps an explicit stop, restart, or delete from racing an agent-triggered
 	// recovery. Different projects remain independent.
-	runState keyedMutex
+	runState          keyedMutex
+	containerRestorer func(context.Context, string) error
+}
+
+// SetContainerRestorer attaches optional application recovery after a missing
+// project container has been recreated. The caller wires this after both
+// services exist, avoiding a construction cycle.
+func (s *Service) SetContainerRestorer(restore func(context.Context, string) error) {
+	s.containerRestorer = restore
 }
 
 func New(
@@ -40,20 +64,50 @@ func New(
 	containers ContainerDependencies,
 	secrets SecretsRepository,
 	access AccessRepository,
+	options ...Option,
 ) *Service {
-	return &Service{
+	service := &Service{
 		repo:               repo,
 		containerLifecycle: containers.Lifecycle,
 		containerInspector: containers.Inspector,
 		containerNetwork:   containers.Network,
 		containerListeners: containers.Listeners,
+		containerSetup:     containers.Setup,
+		authorizer:         permission.SystemOnlyAuthorizer{},
 		access:             newAccessList(access),
 		secrets:            newSecretStore(secrets, containers.Environment),
 		browsers:           newAgentBrowsers(containers.Browser, repo),
+		audit:              audit.Nop{},
 	}
+	for _, option := range options {
+		if option != nil {
+			option(service)
+		}
+	}
+	service.requireLifecycle = bind(service.authorizer, PermissionLifecycleManage)
+	service.requireAccess = bind(service.authorizer, PermissionAccessManage)
+	return service
 }
 
+// WithChatCleanup makes project deletion remove every associated chat before
+// destroying the container or project record.
+func WithChatCleanup(chats ChatCleanup) Option {
+	return func(service *Service) { service.chats = chats }
+}
+
+// ListSecrets returns every secret with its plaintext value, so a call is a
+// secret read and is audited as one. The internal env-sync paths talk to the
+// repository directly and stay out of the trail.
 func (s *Service) ListSecrets(ctx context.Context, id ID) ([]Secret, error) {
+	if err := bind(s.authorizer, PermissionSecretsManage)(ctx, id); err != nil {
+		return nil, err
+	}
+	secrets, err := s.listSecrets(ctx, id)
+	s.record(ctx, audit.ActionProjectSecretRead, auditTargetID(id), audit.Meta{"count": len(secrets)}, err)
+	return secrets, err
+}
+
+func (s *Service) listSecrets(ctx context.Context, id ID) ([]Secret, error) {
 	if _, err := s.Get(ctx, id); err != nil {
 		return nil, err
 	}
@@ -61,6 +115,15 @@ func (s *Service) ListSecrets(ctx context.Context, id ID) ([]Secret, error) {
 }
 
 func (s *Service) SetSecret(ctx context.Context, id ID, key, value string) (Secret, error) {
+	if err := bind(s.authorizer, PermissionSecretsManage)(ctx, id); err != nil {
+		return Secret{}, err
+	}
+	secret, err := s.setSecret(ctx, id, key, value)
+	s.record(ctx, audit.ActionProjectSecretSet, auditTargetID(id), audit.Meta{"key": key}, err)
+	return secret, err
+}
+
+func (s *Service) setSecret(ctx context.Context, id ID, key, value string) (Secret, error) {
 	if !ValidID(id) {
 		return Secret{}, ErrInvalidID
 	}
@@ -75,6 +138,15 @@ func (s *Service) SetSecret(ctx context.Context, id ID, key, value string) (Secr
 }
 
 func (s *Service) DeleteSecret(ctx context.Context, id ID, key string) error {
+	if err := bind(s.authorizer, PermissionSecretsManage)(ctx, id); err != nil {
+		return err
+	}
+	err := s.deleteSecret(ctx, id, key)
+	s.record(ctx, audit.ActionProjectSecretDelete, auditTargetID(id), audit.Meta{"key": key}, err)
+	return err
+}
+
+func (s *Service) deleteSecret(ctx context.Context, id ID, key string) error {
 	if !ValidID(id) {
 		return ErrInvalidID
 	}
@@ -132,9 +204,34 @@ func (s *Service) WorkspaceForProject(ctx context.Context, id ID) (string, error
 // Create provisions a new project. callerEmail (if non-empty) is added to
 // the project's access list so the creator immediately has access.
 func (s *Service) Create(ctx context.Context, in CreateInput, callerEmail string) (Meta, error) {
+	if err := s.authorizer.Require(ctx, permission.Check{Permission: PermissionCreate, Scope: permission.PlatformScope()}); err != nil {
+		return Meta{}, err
+	}
+	m, err := s.create(ctx, in, callerEmail)
+	target := auditProjectTarget(m.ID, m)
+	if target.Name == "" {
+		// The store never assigned an id or name, so record the request.
+		target.Name = strings.TrimSpace(in.Name)
+	}
+	s.record(ctx, audit.ActionProjectCreate, target, audit.Meta{"slug": m.Slug, "status": string(m.Status)}, err)
+	return m, err
+}
+
+func (s *Service) create(ctx context.Context, in CreateInput, callerEmail string) (Meta, error) {
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		return Meta{}, ErrNameRequired
+	}
+	if strings.Contains(name, "--") {
+		return Meta{}, ErrReservedNameSeparator
+	}
+	// Refuse before anything is recorded, so a full disk surfaces as a clear
+	// error on the create request rather than a project stuck in an error
+	// state carrying the transcript of a failed image unpack.
+	if s.containerLifecycle != nil {
+		if err := s.containerLifecycle.CheckCapacity(ctx); err != nil {
+			return Meta{}, err
+		}
 	}
 
 	m, err := s.repo.Create(ctx, Meta{
@@ -159,19 +256,41 @@ func (s *Service) Create(ctx context.Context, in CreateInput, callerEmail string
 		if syncErr := s.secrets.syncContainer(ctx, m.ID, m.ContainerName); syncErr != nil {
 			log.Printf("projects: sync env to %s after launch: %v", m.ContainerName, syncErr)
 		}
+		if err := s.ensureUserSetup(ctx, m); err != nil {
+			return s.repo.SetStatus(ctx, m.ID, StatusError, err.Error())
+		}
 	}
-	return s.repo.SetStatus(ctx, m.ID, StatusRunning, "")
+	return s.setSetupComplete(ctx, m.ID)
 }
 
 func (s *Service) Update(ctx context.Context, id ID, in UpdateInput) (Meta, error) {
+	if err := bind(s.authorizer, PermissionControlsManage)(ctx, id); err != nil {
+		return Meta{}, err
+	}
 	if !ValidID(id) {
 		return Meta{}, ErrInvalidID
 	}
-	return s.repo.Update(ctx, id, func(m *Meta) {
+	if in.Name != nil && strings.Contains(*in.Name, "--") {
+		return Meta{}, ErrReservedNameSeparator
+	}
+	previous, _ := s.repo.Get(ctx, id)
+	m, err := s.repo.Update(ctx, id, func(m *Meta) {
 		if in.Name != nil && strings.TrimSpace(*in.Name) != "" {
 			m.Name = strings.TrimSpace(*in.Name)
 		}
 	})
+	// Name is the only field UpdateInput can change today, so an update that
+	// carries one is a rename.
+	if in.Name != nil && strings.TrimSpace(*in.Name) != "" {
+		s.record(
+			ctx,
+			audit.ActionProjectRename,
+			auditProjectTarget(id, m),
+			audit.Meta{"from": previous.Name, "to": strings.TrimSpace(*in.Name)},
+			err,
+		)
+	}
+	return m, err
 }
 
 var resourceSizePattern = regexp.MustCompile(`^[1-9][0-9]*(MiB|GiB|TiB)$`)
@@ -180,6 +299,21 @@ var resourceSizePattern = regexp.MustCompile(`^[1-9][0-9]*(MiB|GiB|TiB)$`)
 // running or stopped container is updated immediately; a missing container
 // retains the desired values in metadata for its next launch.
 func (s *Service) SetContainerLimits(ctx context.Context, id ID, limits ContainerLimits) (ContainerInspect, error) {
+	if err := bind(s.authorizer, PermissionControlsManage)(ctx, id); err != nil {
+		return ContainerInspect{}, err
+	}
+	info, err := s.setContainerLimits(ctx, id, limits)
+	s.record(
+		ctx,
+		audit.ActionProjectContainerLimits,
+		auditTargetID(id),
+		audit.Meta{"cpu": limits.CPU, "memory": limits.Memory, "disk": limits.Disk},
+		err,
+	)
+	return info, err
+}
+
+func (s *Service) setContainerLimits(ctx context.Context, id ID, limits ContainerLimits) (ContainerInspect, error) {
 	if !ValidID(id) {
 		return ContainerInspect{}, ErrInvalidID
 	}
@@ -252,6 +386,11 @@ func limitsEmpty(limits ContainerLimits) bool {
 }
 
 func (s *Service) Reorder(ctx context.Context, ids []ID) ([]Meta, error) {
+	for _, id := range ids {
+		if err := bind(s.authorizer, PermissionControlsManage)(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -280,14 +419,28 @@ func (s *Service) Reorder(ctx context.Context, ids []ID) ([]Meta, error) {
 }
 
 func (s *Service) Delete(ctx context.Context, id ID) error {
+	if err := bind(s.authorizer, PermissionControlsManage)(ctx, id); err != nil {
+		return err
+	}
+	deleted, err := s.delete(ctx, id)
+	s.record(ctx, audit.ActionProjectDelete, auditProjectTarget(id, deleted), nil, err)
+	return err
+}
+
+func (s *Service) delete(ctx context.Context, id ID) (Meta, error) {
 	if !ValidID(id) {
-		return ErrInvalidID
+		return Meta{}, ErrInvalidID
 	}
 	unlock := s.runState.lock(id)
 	defer unlock()
 	m, err := s.repo.Get(ctx, id)
 	if err != nil {
-		return err
+		return Meta{}, err
+	}
+	if s.chats != nil {
+		if err := s.chats.DeleteProjectChats(ctx, id); err != nil {
+			return m, fmt.Errorf("delete project chats: %w", err)
+		}
 	}
 	s.browsers.clearState(id)
 	if s.containerLifecycle != nil && m.ContainerName != "" {
@@ -301,41 +454,79 @@ func (s *Service) Delete(ctx context.Context, id ID) error {
 	if err := s.access.deleteAll(ctx, id); err != nil {
 		log.Printf("projects: delete access %s: %v", id, err)
 	}
-	return s.repo.Delete(ctx, id)
+	return m, s.repo.Delete(ctx, id)
 }
 
+// Start converges one project to RUNNING on behalf of the actor in ctx, who
+// must hold projects.lifecycle.manage for it. Trusted internal callers that
+// need the container running use an explicit system context or the
+// unexported start.
 func (s *Service) Start(ctx context.Context, id ID) (Meta, error) {
+	if err := s.requireLifecycle(ctx, id); err != nil {
+		return Meta{}, err
+	}
+	return s.start(ctx, id)
+}
+
+// start is Start without authorization, for callers inside this package that
+// are already acting under another permission.
+func (s *Service) start(ctx context.Context, id ID) (Meta, error) {
 	if !ValidID(id) {
 		return Meta{}, ErrInvalidID
 	}
 	unlock := s.runState.lock(id)
 	defer unlock()
-	return s.startLocked(ctx, id)
+	m, converged, err := s.startLocked(ctx, id)
+	// Start is idempotent and every agent run calls it. Only an actual
+	// transition (or a failure) is worth an audit line.
+	if converged || err != nil {
+		s.record(ctx, audit.ActionProjectContainerStart, auditProjectTarget(id, m), nil, err)
+	}
+	return m, err
 }
 
 // startLocked converges one project to RUNNING while the caller owns its
 // run-state lock. Restart uses this directly for a missing instance to avoid
-// recursively acquiring the same non-reentrant mutex.
-func (s *Service) startLocked(ctx context.Context, id ID) (Meta, error) {
+// recursively acquiring the same non-reentrant mutex. The bool reports whether
+// the container was not already running, which is what makes a start worth
+// auditing.
+func (s *Service) startLocked(ctx context.Context, id ID) (Meta, bool, error) {
 	m, err := s.repo.Get(ctx, id)
 	if err != nil {
-		return Meta{}, err
+		return Meta{}, false, err
 	}
+	converged := true
 	if s.containerLifecycle != nil {
 		state, err := s.containerLifecycle.State(ctx, m.ContainerName)
 		if err != nil {
-			return s.setStartError(ctx, id, err)
+			meta, startErr := s.setStartError(ctx, id, err)
+			return meta, converged, startErr
 		}
+		converged = state != ContainerStateRunning
 		if err := s.containerLifecycle.Ensure(ctx, m); err != nil {
-			return s.setStartError(ctx, id, err)
+			meta, startErr := s.setStartError(ctx, id, err)
+			return meta, converged, startErr
 		}
 		if state == ContainerStateMissing {
 			if syncErr := s.secrets.syncContainer(ctx, id, m.ContainerName); syncErr != nil {
 				log.Printf("projects: sync env to %s after ensure: %v", m.ContainerName, syncErr)
 			}
 		}
+		if err := s.ensureUserSetup(ctx, m); err != nil {
+			meta, startErr := s.setStartError(ctx, id, err)
+			return meta, converged, startErr
+		}
+		// Start also recovers projects left in error by an earlier upgrade. It
+		// retries setup in the existing container, then restores installed apps.
+		if (state == ContainerStateMissing || m.Status == StatusError) && s.containerRestorer != nil {
+			if err := s.containerRestorer(ctx, string(id)); err != nil {
+				meta, startErr := s.setStartError(ctx, id, fmt.Errorf("restore applications: %w", err))
+				return meta, converged, startErr
+			}
+		}
 	}
-	return s.repo.SetStatus(ctx, id, StatusRunning, "")
+	meta, err := s.setSetupComplete(ctx, id)
+	return meta, converged, err
 }
 
 var ErrProjectBusy = errors.New("project has an active agent process")
@@ -343,6 +534,21 @@ var ErrProjectBusy = errors.New("project has an active agent process")
 // Upgrade replaces one project container through the same convergence path
 // used by normal starts. Legacy agent homes are migrated before deletion.
 func (s *Service) Upgrade(ctx context.Context, id ID, includeBusy bool) (Meta, error) {
+	if err := bind(s.authorizer, PermissionControlsManage)(ctx, id); err != nil {
+		return Meta{}, err
+	}
+	m, err := s.upgrade(ctx, id, includeBusy)
+	s.record(
+		ctx,
+		audit.ActionProjectContainerRecycle,
+		auditProjectTarget(id, m),
+		audit.Meta{"includeBusy": includeBusy},
+		err,
+	)
+	return m, err
+}
+
+func (s *Service) upgrade(ctx context.Context, id ID, includeBusy bool) (Meta, error) {
 	if !ValidID(id) {
 		return Meta{}, ErrInvalidID
 	}
@@ -380,21 +586,56 @@ func (s *Service) Upgrade(ctx context.Context, id ID, includeBusy bool) (Meta, e
 			return s.setStartError(ctx, id, err)
 		}
 	}
+	if _, err := s.repo.Update(ctx, id, func(m *Meta) { m.SetupRepair = nil }); err != nil {
+		return Meta{}, err
+	}
 	if err := s.containerLifecycle.Ensure(ctx, m); err != nil {
 		return s.setStartError(ctx, id, err)
 	}
 	if syncErr := s.secrets.syncContainer(ctx, id, m.ContainerName); syncErr != nil {
 		log.Printf("projects: sync env to %s after upgrade: %v", m.ContainerName, syncErr)
 	}
-	return s.repo.SetStatus(ctx, id, StatusRunning, "")
+	if err := s.ensureUserSetup(ctx, m); err != nil {
+		return s.setStartError(ctx, id, err)
+	}
+	return s.setSetupComplete(ctx, id)
+}
+
+func (s *Service) ensureUserSetup(ctx context.Context, m Meta) error {
+	if s.containerSetup == nil {
+		return nil
+	}
+	environment, err := s.setupEnvironment(ctx, m.ID)
+	if err != nil {
+		return err
+	}
+	return s.containerSetup.Ensure(ctx, m.ContainerName, environment)
+}
+
+func (s *Service) setupEnvironment(ctx context.Context, id ID) (map[string]string, error) {
+	secrets, err := s.secrets.list(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("load project setup environment: %w", err)
+	}
+	environment := make(map[string]string, len(secrets))
+	for _, secret := range secrets {
+		environment[secret.Key] = secret.Value
+	}
+	return environment, nil
 }
 
 // setStartError keeps the persisted project status useful for the UI while
-// returning the operational failure to callers. Agent providers must stop here
-// instead of attempting CLI provisioning against a container that never
-// started and masking the real cause with a later "instance not found" error.
+// returning the operational failure to callers. StartForAgent only bypasses a
+// confirmed script failure after checking the container is running; failed
+// container preparation must still stop CLI provisioning.
 func (s *Service) setStartError(ctx context.Context, id ID, cause error) (Meta, error) {
-	m, statusErr := s.repo.SetStatus(ctx, id, StatusError, cause.Error())
+	m, statusErr := s.repo.Update(ctx, id, func(m *Meta) {
+		m.Status, m.ErrorMsg = StatusError, cause.Error()
+		m.SetupFailed = errors.Is(cause, ErrSetupFailed)
+		if m.SetupFailed && m.SetupRepair != nil && m.SetupRepair.State == "succeeded" {
+			m.SetupRepair = nil
+		}
+	})
 	if statusErr != nil {
 		return Meta{}, errors.Join(cause, statusErr)
 	}
@@ -402,6 +643,15 @@ func (s *Service) setStartError(ctx context.Context, id ID, cause error) (Meta, 
 }
 
 func (s *Service) Stop(ctx context.Context, id ID) (Meta, error) {
+	if err := s.requireLifecycle(ctx, id); err != nil {
+		return Meta{}, err
+	}
+	m, err := s.stop(ctx, id)
+	s.record(ctx, audit.ActionProjectContainerStop, auditProjectTarget(id, m), nil, err)
+	return m, err
+}
+
+func (s *Service) stop(ctx context.Context, id ID) (Meta, error) {
 	if !ValidID(id) {
 		return Meta{}, ErrInvalidID
 	}
@@ -425,6 +675,15 @@ func (s *Service) Stop(ctx context.Context, id ID) (Meta, error) {
 // missing container is launched instead, so Restart always converges on a
 // running workspace.
 func (s *Service) Restart(ctx context.Context, id ID) (Meta, error) {
+	if err := s.requireLifecycle(ctx, id); err != nil {
+		return Meta{}, err
+	}
+	m, err := s.restart(ctx, id)
+	s.record(ctx, audit.ActionProjectContainerRestart, auditProjectTarget(id, m), nil, err)
+	return m, err
+}
+
+func (s *Service) restart(ctx context.Context, id ID) (Meta, error) {
 	if !ValidID(id) {
 		return Meta{}, ErrInvalidID
 	}
@@ -440,13 +699,17 @@ func (s *Service) Restart(ctx context.Context, id ID) (Meta, error) {
 			return s.repo.SetStatus(ctx, id, StatusError, err.Error())
 		}
 		if state == ContainerStateMissing {
-			return s.startLocked(ctx, id)
+			meta, _, startErr := s.startLocked(ctx, id)
+			return meta, startErr
 		}
 		if err := s.containerLifecycle.Restart(ctx, m.ContainerName); err != nil {
 			return s.repo.SetStatus(ctx, id, StatusError, err.Error())
 		}
+		if err := s.ensureUserSetup(ctx, m); err != nil {
+			return s.setStartError(ctx, id, err)
+		}
 	}
-	return s.repo.SetStatus(ctx, id, StatusRunning, "")
+	return s.setSetupComplete(ctx, id)
 }
 
 func (s *Service) InspectContainer(ctx context.Context, id ID) (ContainerInspect, error) {
@@ -473,6 +736,15 @@ func (s *Service) InspectContainer(ctx context.Context, id ID) (ContainerInspect
 // short grace period if DHCP is slow). Manual recovery for the
 // networkd-dropped-lease failure mode.
 func (s *Service) RepairNetwork(ctx context.Context, id ID) (ContainerInspect, error) {
+	if err := s.requireLifecycle(ctx, id); err != nil {
+		return ContainerInspect{}, err
+	}
+	info, err := s.repairNetwork(ctx, id)
+	s.record(ctx, audit.ActionProjectContainerRepair, auditTargetID(id), nil, err)
+	return info, err
+}
+
+func (s *Service) repairNetwork(ctx context.Context, id ID) (ContainerInspect, error) {
 	if !ValidID(id) {
 		return ContainerInspect{}, ErrInvalidID
 	}
@@ -512,6 +784,9 @@ func hasIPv4(info ContainerInspect) bool {
 }
 
 func (s *Service) ListContainerApps(ctx context.Context, id ID) ([]ContainerApp, error) {
+	if err := workspaceaccess.Require(ctx, s.authorizer, "browser", string(id)); err != nil {
+		return nil, err
+	}
 	if !ValidID(id) {
 		return nil, ErrInvalidID
 	}
@@ -535,7 +810,16 @@ func (s *Service) TouchAgentBrowserActivity(ctx context.Context, id ID) {
 // Agent Browser as starting, and provisions the stack in the background.
 // Idempotent while a start is already in flight.
 func (s *Service) StartAgentBrowser(ctx context.Context, id ID) (AgentBrowserInfo, error) {
-	m, err := s.Start(ctx, id)
+	if err := workspaceaccess.Require(ctx, s.authorizer, "browser", string(id)); err != nil {
+		return AgentBrowserInfo{}, err
+	}
+	info, err := s.startAgentBrowser(ctx, id)
+	s.record(ctx, audit.ActionProjectBrowserStart, auditTargetID(id), nil, err)
+	return info, err
+}
+
+func (s *Service) startAgentBrowser(ctx context.Context, id ID) (AgentBrowserInfo, error) {
+	m, err := s.start(ctx, id)
 	if err != nil {
 		return AgentBrowserInfo{}, err
 	}
@@ -545,6 +829,9 @@ func (s *Service) StartAgentBrowser(ctx context.Context, id ID) (AgentBrowserInf
 // AgentBrowserStatus returns split core/view browser state and records a
 // heartbeat so an open pane keeps the idle reaper from tearing down the stack.
 func (s *Service) AgentBrowserStatus(ctx context.Context, id ID) (AgentBrowserInfo, error) {
+	if err := workspaceaccess.Require(ctx, s.authorizer, "browser", string(id)); err != nil {
+		return AgentBrowserInfo{}, err
+	}
 	m, err := s.Get(ctx, id)
 	if err != nil {
 		return AgentBrowserInfo{}, err
@@ -556,6 +843,15 @@ func (s *Service) AgentBrowserStatus(ctx context.Context, id ID) (AgentBrowserIn
 // container, leaving the container running and the persistent browser
 // profile on disk so logins survive.
 func (s *Service) StopAgentBrowser(ctx context.Context, id ID) error {
+	if err := workspaceaccess.Require(ctx, s.authorizer, "browser", string(id)); err != nil {
+		return err
+	}
+	err := s.stopAgentBrowser(ctx, id)
+	s.record(ctx, audit.ActionProjectBrowserStop, auditTargetID(id), nil, err)
+	return err
+}
+
+func (s *Service) stopAgentBrowser(ctx context.Context, id ID) error {
 	m, err := s.Get(ctx, id)
 	if err != nil {
 		return err
@@ -565,6 +861,15 @@ func (s *Service) StopAgentBrowser(ctx context.Context, id ID) error {
 
 // StopAgentBrowserView tears down only the human noVNC layer.
 func (s *Service) StopAgentBrowserView(ctx context.Context, id ID) error {
+	if err := workspaceaccess.Require(ctx, s.authorizer, "browser", string(id)); err != nil {
+		return err
+	}
+	err := s.stopAgentBrowserView(ctx, id)
+	s.record(ctx, audit.ActionProjectBrowserStop, auditTargetID(id), audit.Meta{"scope": "view"}, err)
+	return err
+}
+
+func (s *Service) stopAgentBrowserView(ctx context.Context, id ID) error {
 	m, err := s.Get(ctx, id)
 	if err != nil {
 		return err
@@ -594,7 +899,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 			continue
 		}
 		want := statusForContainerState(state)
-		if want != m.Status {
+		// A running container does not prove that project setup succeeded.
+		// Keep its actionable failure until a successful Start/Restart clears it.
+		if want != m.Status && !(want == StatusRunning && m.Status == StatusError) {
 			if _, err := s.repo.SetStatus(ctx, m.ID, want, ""); err != nil {
 				log.Printf("projects: reconcile %s: %v", m.ID, err)
 			}
@@ -633,6 +940,9 @@ func (s *Service) HasAccess(ctx context.Context, id ID, email string) (bool, err
 
 // ListAccess returns the sorted, normalized membership list for a project.
 func (s *Service) ListAccess(ctx context.Context, id ID) ([]string, error) {
+	if err := s.requireAccess(ctx, id); err != nil {
+		return nil, err
+	}
 	if _, err := s.Get(ctx, id); err != nil {
 		return nil, err
 	}
@@ -642,6 +952,15 @@ func (s *Service) ListAccess(ctx context.Context, id ID) ([]string, error) {
 // AddAccess adds email to the project's membership list. Caller is
 // responsible for verifying the email belongs to a registered user.
 func (s *Service) AddAccess(ctx context.Context, id ID, email string) error {
+	if err := s.requireAccess(ctx, id); err != nil {
+		return err
+	}
+	err := s.addAccess(ctx, id, email)
+	s.record(ctx, audit.ActionProjectMemberAdd, auditTargetID(id), audit.Meta{"member": email}, err)
+	return err
+}
+
+func (s *Service) addAccess(ctx context.Context, id ID, email string) error {
 	if _, err := s.Get(ctx, id); err != nil {
 		return err
 	}
@@ -650,6 +969,15 @@ func (s *Service) AddAccess(ctx context.Context, id ID, email string) error {
 
 // RemoveAccess deletes email from the project's membership list.
 func (s *Service) RemoveAccess(ctx context.Context, id ID, email string) error {
+	if err := s.requireAccess(ctx, id); err != nil {
+		return err
+	}
+	err := s.removeAccess(ctx, id, email)
+	s.record(ctx, audit.ActionProjectMemberRemove, auditTargetID(id), audit.Meta{"member": email}, err)
+	return err
+}
+
+func (s *Service) removeAccess(ctx context.Context, id ID, email string) error {
 	if _, err := s.Get(ctx, id); err != nil {
 		return err
 	}

@@ -17,6 +17,7 @@ export const FolderOpen = (p: P) => (<svg {...base} {...p}><path d="m6 14 1.45-2
 export const Image = (p: P) => (<svg {...base} {...p}><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>);
 export const Film = (p: P) => (<svg {...base} {...p}><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 7.5h4M3 12h18M3 16.5h4M17 7.5h4M17 16.5h4"/></svg>);
 export const Music = (p: P) => (<svg {...base} {...p}><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>);
+export const Microphone = (p: P) => (<svg {...base} {...p}><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg>);
 export const Archive = (p: P) => (<svg {...base} {...p}><rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9M10 13h4"/></svg>);
 export const FileText = (p: P) => (<svg {...base} {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/></svg>);
 export const ChevronsUpDown = (p: P) => (<svg {...base} {...p}><path d="M7 9l5-5 5 5M7 15l5 5 5-5"/></svg>);
@@ -68,3 +69,9 @@ export const ShieldCheck = (p: P) => (<svg {...base} {...p}><path d="M12 22s8-4 
 export const Bell = (p: P) => (<svg {...base} {...p}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>);
 export const BellOff = (p: P) => (<svg {...base} {...p}><path d="M8.7 3A6 6 0 0 1 18 8c0 2.4.4 4.2.9 5.5M6 8a6 6 0 0 1 .3-1.8M3 17h15M13.73 21a2 2 0 0 1-3.46 0"/><path d="m1 1 22 22"/></svg>);
 export const Smartphone = (p: P) => (<svg {...base} {...p}><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg>);
+export const Mail = (p: P) => (<svg {...base} {...p}><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></svg>);
+export const Filter = (p: P) => (<svg {...base} {...p}><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>);
+export const Calendar = (p: P) => (<svg {...base} {...p}><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg>);
+export const SlidersHorizontal = (p: P) => (<svg {...base} {...p}><path d="M3 6h10M17 6h4M3 12h4M11 12h10M3 18h10M17 18h4"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="15" cy="18" r="2"/></svg>);
+export const CornerDownLeft = (p: P) => (<svg {...base} {...p}><path d="M9 10 4 15l5 5"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>);
+export const AlertTriangle = (p: P) => (<svg {...base} {...p}><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4M12 17h.01"/></svg>);

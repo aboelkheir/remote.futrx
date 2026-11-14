@@ -1,8 +1,11 @@
+import { useEffectivePermissions } from "../../state/hooks/permissions/useEffectivePermissions";
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import type { ChatMeta } from "../../models/chat";
 import type { ProjectMeta } from "../../models/project";
 import type { DropPosition } from "../../models/workspace";
 import { ChevronDown, ChevronRight, Loader, Plus, Settings } from "../primitives/icons";
+import { ExtensionSlot } from "../primitives/ExtensionSlot";
+import { EXTENSION_SLOTS } from "../../config/extensions";
 import { ChatRow } from "./ChatRow";
 
 const projectActionClass =
@@ -12,7 +15,6 @@ const projectActionClass =
 export function ProjectGroup({
   project,
   chats,
-  visibleChats,
   activeChatId,
   collapsed,
   onToggle,
@@ -22,6 +24,7 @@ export function ProjectGroup({
   onDeleteChat,
   onToggleChatUnread,
   onForkChat,
+  onRenameChat,
   draggable,
   dragging,
   dropPosition,
@@ -33,7 +36,6 @@ export function ProjectGroup({
 }: {
   project: ProjectMeta;
   chats: ChatMeta[];
-  visibleChats: ChatMeta[];
   activeChatId: string | null;
   collapsed: boolean;
   onToggle: () => void;
@@ -43,6 +45,7 @@ export function ProjectGroup({
   onDeleteChat: (chat: ChatMeta, event: Event) => void;
   onToggleChatUnread: (chat: ChatMeta, event: Event) => void;
   onForkChat: (chat: ChatMeta, event: Event) => void;
+  onRenameChat: (chat: ChatMeta, title: string) => void;
   draggable?: boolean;
   dragging?: boolean;
   dropPosition?: DropPosition | null;
@@ -52,6 +55,7 @@ export function ProjectGroup({
   onDrop?: (event: DragEvent) => void;
   onDragEnd?: (event: DragEvent) => void;
 }) {
+  const canCreateChat = useEffectivePermissions(project.id)["chats.project.create"] === true;
   const provisioning = project.status === "provisioning";
   const hasUnread = chats.some((chat) => (chat.lastMessageAt || 0) > (chat.lastReadAt || 0));
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -75,7 +79,7 @@ export function ProjectGroup({
       node.removeEventListener("scroll", measure);
       observer.disconnect();
     };
-  }, [collapsed, visibleChats.length]);
+  }, [collapsed, chats.length]);
 
   return (
     <div
@@ -125,6 +129,11 @@ export function ProjectGroup({
 
         {/* Project-level actions stay out of the way until the header is touched. */}
         <div class="flex flex-none items-center gap-0.5 md:opacity-0 md:transition-opacity md:group-hover/head:opacity-100 md:group-focus-within/head:opacity-100">
+          <ExtensionSlot
+            name={EXTENSION_SLOTS.projectRowActions}
+            projectId={project.id}
+            projectName={project.name}
+          />
           <button
             type="button"
             onClick={(event) => {
@@ -143,7 +152,7 @@ export function ProjectGroup({
               event.stopPropagation();
               onNewChat();
             }}
-            disabled={provisioning}
+            disabled={provisioning || !canCreateChat}
             class={`${projectActionClass} disabled:cursor-not-allowed disabled:opacity-40`}
             aria-label="New chat in project"
             title={provisioning ? "Project is still provisioning" : "New chat in this project"}
@@ -168,11 +177,11 @@ export function ProjectGroup({
           ref={listRef}
           class="sidebar-project-chat-list space-y-px overflow-y-auto pl-3 pr-0.5 touch-scroll scrollbar-thin"
         >
-          {visibleChats.length === 0 ? (
+          {chats.length === 0 ? (
             <button
               type="button"
               onClick={onNewChat}
-              disabled={provisioning}
+              disabled={provisioning || !canCreateChat}
               class="mb-1 ml-2 inline-flex h-7 items-center gap-1.5 rounded-control px-2
                      text-[12px] text-ink-400 transition-colors hover:bg-tint hover:text-ink-100
                      disabled:cursor-not-allowed disabled:opacity-40"
@@ -180,7 +189,7 @@ export function ProjectGroup({
               <Plus class="h-3.5 w-3.5" /> New chat
             </button>
           ) : (
-            visibleChats.map((chat) => (
+            chats.map((chat) => (
               <ChatRow
                 key={chat.id}
                 chat={chat}
@@ -189,6 +198,7 @@ export function ProjectGroup({
                 onDelete={(event) => onDeleteChat(chat, event)}
                 onToggleUnread={(event) => onToggleChatUnread(chat, event)}
                 onFork={(event) => onForkChat(chat, event)}
+                onRename={(title) => onRenameChat(chat, title)}
               />
             ))
           )}

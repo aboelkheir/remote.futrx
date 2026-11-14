@@ -2,6 +2,7 @@ package httphandlers
 
 import (
 	"context"
+	permission "github.com/futrx-com/remote.futrx.com/internal/rbac"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,9 +25,14 @@ func TestProjectHandlerTLSAskUsesConfiguredPublicHostname(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "configured code host",
+			name:       "removed shared code host",
+			domain:     "code.remote.example.test",
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "removed code host",
 			domain:     project.Slug + ".code.remote.example.test",
-			wantStatus: http.StatusOK,
+			wantStatus: http.StatusNotFound,
 		},
 		{
 			name:       "previous hard-coded host",
@@ -81,12 +87,12 @@ func newTLSAskProjectHandler(t *testing.T, publicHostname string) (*ProjectHandl
 	}
 	projects := serviceproject.New(repo, serviceproject.ContainerDependencies{}, nil, nil)
 	project, err := projects.Create(
-		context.Background(),
+		permission.ContextWithSystemActor(context.Background()),
 		serviceproject.CreateInput{Name: "TLS Ask Project"},
 		"user@example.com",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewProjectHandler(projects, nil, nil, publicHostname), project
+	return NewProjectHandler(projects, nil, nil, publicHostname, nil), project
 }

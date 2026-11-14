@@ -17,6 +17,16 @@ func TestLoadUsesGlobalAgentCapabilityTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadUsesConfiguredGitIdentity(t *testing.T) {
+	t.Setenv("REMOTE_GIT_USER_NAME", "Example Developer")
+	t.Setenv("REMOTE_GIT_USER_EMAIL", "developer@example.com")
+
+	identity := Load().Git
+	if identity.UserName != "Example Developer" || identity.UserEmail != "developer@example.com" {
+		t.Fatalf("git identity = %#v", identity)
+	}
+}
+
 func TestLoadUsesGlobalAgentPolicyDefaults(t *testing.T) {
 	options := Load().Agent
 	if options.CapabilityCacheTTL != 24*time.Hour {
@@ -64,31 +74,6 @@ func TestLoadUsesSetupTokenTTLEnv(t *testing.T) {
 	t.Setenv("SETUP_TOKEN_TTL", "invalid")
 	if got := Load().Auth.SetupTokenTTL; got != 30*time.Minute {
 		t.Fatalf("invalid setup token TTL fallback = %s, want 30m", got)
-	}
-}
-
-func TestCodeServerBaseURLUsesInstalledDomain(t *testing.T) {
-	tests := []struct {
-		base string
-		want string
-	}{
-		{base: "https://remote.example.com", want: "https://code.remote.example.com/"},
-		{base: "https://app.company.test:8443/path?ignored=yes", want: "https://code.app.company.test:8443/"},
-	}
-	for _, test := range tests {
-		got, err := CodeServerBaseURL(test.base)
-		if err != nil {
-			t.Fatalf("CodeServerBaseURL(%q): %v", test.base, err)
-		}
-		if got != test.want {
-			t.Fatalf("CodeServerBaseURL(%q) = %q, want %q", test.base, got, test.want)
-		}
-	}
-}
-
-func TestCodeServerBaseURLRejectsInvalidBaseURL(t *testing.T) {
-	if _, err := CodeServerBaseURL("remote.example.com"); err == nil {
-		t.Fatal("CodeServerBaseURL accepted a URL without scheme")
 	}
 }
 

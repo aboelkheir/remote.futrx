@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	permission "github.com/futrx-com/remote.futrx.com/internal/rbac"
 	serviceproject "github.com/futrx-com/remote.futrx.com/internal/service/project"
 	serviceshare "github.com/futrx-com/remote.futrx.com/internal/service/share"
 	"github.com/futrx-com/remote.futrx.com/internal/stores/fileproject"
@@ -106,12 +107,12 @@ func TestProjectSharesReportUnavailableWithoutStore(t *testing.T) {
 	}
 	projects := serviceproject.New(repo, serviceproject.ContainerDependencies{}, nil, nil)
 	project, err := projects.Create(
-		context.Background(), serviceproject.CreateInput{Name: "No Shares"}, "owner@example.com",
+		permission.ContextWithSystemActor(context.Background()), serviceproject.CreateInput{Name: "No Shares"}, "owner@example.com",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewProjectHandler(projects, nil, nil, sharesPublicHostname)
+	handler := NewProjectHandler(projects, nil, nil, sharesPublicHostname, nil)
 
 	sharesRequest(
 		t, handler, http.MethodGet,
@@ -171,7 +172,7 @@ func newSharesProjectHandler(t *testing.T) (*ProjectHandler, serviceproject.Meta
 	}
 	projects := serviceproject.New(repo, serviceproject.ContainerDependencies{}, nil, nil)
 	project, err := projects.Create(
-		context.Background(), serviceproject.CreateInput{Name: "Share Project"}, "owner@example.com",
+		permission.ContextWithSystemActor(context.Background()), serviceproject.CreateInput{Name: "Share Project"}, "owner@example.com",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +181,7 @@ func newSharesProjectHandler(t *testing.T) (*ProjectHandler, serviceproject.Meta
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewProjectHandler(projects, nil, nil, sharesPublicHostname).
+	handler := NewProjectHandler(projects, nil, nil, sharesPublicHostname, nil).
 		WithShares(serviceshare.New(shareStore, projects))
 	return handler, project
 }

@@ -5,13 +5,16 @@ import { ToolShell } from "../ToolShell";
 import { DEFAULT_TOOL_OUTPUT_PREVIEW_CHARS } from "../../../../config/chat";
 import { truncate } from "../utils";
 
-export function GenericCall({ name, input, output, outputExpanded, status, isError }: ToolCallProps) {
+export function GenericCall({ name, input, output, outputExpanded, status, isError, onOpen, loadingResponse }: ToolCallProps) {
   return (
     <ToolShell
       icon={<TerminalIcon class="w-4 h-4" />}
       label={<span class="text-ink-300">{name}</span>}
       status={status}
       isError={isError}
+      revealSignal={outputExpanded}
+      onOpen={onOpen}
+      loadingResponse={loadingResponse}
     >
       <div class="divide-y divide-ink-500">
         {input && Object.keys(input).length > 0 && (

@@ -138,13 +138,13 @@ flowchart TD
 
 Claude uses an interactive authorization URL plus a pasted code. Codex and Kimi use device-code flows. Credential files are later synchronized into project containers before agent execution.
 
-MiniMax is project-only but uses a host-managed API-key binding for Token Plan
-subscription keys only. Its global card opens a write-only key field, states
+MiniMax is project-only but uses a host-managed API-key binding for named Token Plan
+subscription keys only. Its global card opens write-only label and key fields, states
 that pay-as-you-go keys are unsupported, and links only to MiniMax's Token Plan
 subscription page. The backend requires the documented `sk-cp-…` prefix and
-validates a submitted key against MiniMax's non-generation Token Plan quota
+validates each submitted key against MiniMax's non-generation Token Plan quota
 endpoint before storing it; rejected keys remain unconfigured. The status
-stream publishes only whether a validated key exists. Before setup, the project
+stream publishes account metadata but never the stored keys. Before setup, the project
 picker lists MiniMax as locked under **Sign in to use** and does not expose its
 models. MiniMax does not satisfy the initial provider gate.
 
@@ -185,23 +185,23 @@ flowchart TD
 
 Project access is enforced independently on project/chat HTTP resources, chat sockets, terminal sockets, uploads, workspace snapshots, project skills, and preview requests.
 
-## Preview and IDE authentication
+## Preview and application web authentication
 
-Caddy calls `/auth/verify` before forwarding IDE or preview traffic. For a preview host, the backend extracts the project slug and checks membership; failing that, it accepts a valid [public share link](../03-platform/06-previews-and-browser.md#public-share-links) for that exact slug and port, which is the one path that authorizes a caller with no platform account. IDE hosts currently receive the registered-user check but not a per-project membership check, and never accept share links. After verification, Caddy strips platform session and share cookies before the request enters project-controlled code.
+Caddy calls `/auth/verify` before forwarding preview traffic. For a preview host, the backend extracts the project slug and checks membership; failing that, it accepts a valid [public share link](../03-platform/06-previews-and-browser.md#public-share-links) for that exact slug and port, which is the one path that authorizes a caller with no platform account. Application launch links under `/apps/<slug>/<app-id>/` redirect to `<label>--<project>.<host>`. The gateway checks project membership and a running installation on every app-host request and never accepts share links. The backend strips platform cookies before forwarding to the application; Caddy strips platform session and share cookies from preview traffic.
 
 ```mermaid
 sequenceDiagram
     actor User
     participant Caddy
     participant Auth as /auth/verify
-    participant Project as Project app or IDE
+    participant Project as Project preview app
 
     User->>Caddy: Request project subdomain
     Caddy->>Auth: Forward-auth with session and original host
     Auth->>Auth: Validate session, and preview project membership
     Auth-->>Caddy: 200, redirect, or deny
     Caddy->>Project: Proxy without platform auth cookies
-    Project-->>User: App or IDE response
+    Project-->>User: App response
 ```
 
 ## Code map
@@ -219,3 +219,4 @@ sequenceDiagram
 - 2FA challenge and Security-tab handlers: [`backend/internal/transport/http/handlers/auth_twofactor_handler.go`](../../backend/internal/transport/http/handlers/auth_twofactor_handler.go), [`backend/internal/transport/http/handlers/security_handler.go`](../../backend/internal/transport/http/handlers/security_handler.go)
 - User service: [`backend/internal/service/user/service.go`](../../backend/internal/service/user/service.go)
 - Access adapter: [`backend/internal/transport/transport.go`](../../backend/internal/transport/transport.go)
+- Permissions (registry, evaluator, roles, delegation; see the [developer guide](../dev/permissions.md)): [`backend/internal/rbac/`](../../backend/internal/rbac/)

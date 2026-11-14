@@ -10,9 +10,14 @@ import (
 	"testing"
 
 	"github.com/futrx-com/remote.futrx.com/internal/agent"
+	"github.com/futrx-com/remote.futrx.com/internal/rbac"
 	agentauth "github.com/futrx-com/remote.futrx.com/internal/service/agent/auth"
 	agentmodule "github.com/futrx-com/remote.futrx.com/internal/service/agent/module"
 )
+
+type allowAgentAccountPolicy struct{}
+
+func (allowAgentAccountPolicy) Require(context.Context, rbac.Check) error { return nil }
 
 const missingAgentCLI = "futrx-test-agent-cli-that-does-not-exist"
 
@@ -146,6 +151,29 @@ func TestAgentAuthMutationRoutesRemainPostOnly(t *testing.T) {
 	}
 }
 
+func TestAgentAccountRoutesExposeOnlyRedactedMetadata(t *testing.T) {
+	handler := newTestAgentAuthHandler()
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux)
+
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run(provider, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(
+				http.MethodPost,
+				"/api/"+provider+"/accounts/activate",
+				strings.NewReader(`{"accountId":"second"}`),
+			))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("activate response = %d %s", rec.Code, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "secret") || !strings.Contains(rec.Body.String(), `"activeAccountId":"second"`) {
+				t.Fatalf("activate response = %s", rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestAgentAuthAPIKeyRouteSavesAndDeletesWithoutReturningCredential(t *testing.T) {
 	handler := newTestAgentAuthHandler()
 	mux := http.NewServeMux()
@@ -201,6 +229,7 @@ func TestAgentAuthAPIKeyRouteMapsProviderRejectionToCallerError(t *testing.T) {
 		agentauth.APIKeyValidatorFunc(func(context.Context, string) error {
 			return agentauth.ErrAPIKeyRejected
 		}),
+		allowAgentAccountPolicy{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -220,6 +249,26 @@ func TestAgentAuthAPIKeyRouteMapsProviderRejectionToCallerError(t *testing.T) {
 	if rec.Code != http.StatusBadRequest ||
 		rec.Body.String() != `{"error":"API key is invalid or unauthorized"}`+"\n" {
 		t.Fatalf("response = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentAuthAPIKeyRoutesFailClosedWithoutPolicy(t *testing.T) {
+	store := &agentAuthMemoryKeyStore{keys: map[agent.ProviderID]string{agent.ProviderMiniMax: "existing-key"}}
+	apiKeys, err := agentauth.NewAPIKeyService(context.Background(), agent.ProviderMiniMax, store, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	NewAgentAuthHandler([]agentauth.Binding{agentauth.NewAPIKeyBinding(agent.ProviderMiniMax, apiKeys)}, nil).RegisterRoutes(mux)
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(method, "/api/minimax/login/api-key", strings.NewReader(`{"apiKey":"replacement-key"}`)))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s: %d %s", method, rec.Code, rec.Body)
+		}
+		if store.keys[agent.ProviderMiniMax] != "existing-key" {
+			t.Fatalf("%s changed denied credential", method)
+		}
 	}
 }
 
@@ -280,13 +329,13 @@ func TestAgentAuthOperationalErrorsAndCancelShape(t *testing.T) {
 	}{
 		{
 			path: "/api/claude/login/start",
-			want: http.StatusInternalServerError,
-			body: `{"error":"claude CLI not found on PATH - install it first"}` + "\n",
+			want: http.StatusBadRequest,
+			body: `{"error":"account label is required; use the saved-account login flow"}` + "\n",
 		},
 		{
 			path: "/api/codex/login/device",
-			want: http.StatusInternalServerError,
-			body: `{"error":"codex CLI not found on PATH - install it first"}` + "\n",
+			want: http.StatusBadRequest,
+			body: `{"error":"account label is required; use the saved-account login flow"}` + "\n",
 		},
 		{
 			path: "/api/kimi/login/device",
@@ -333,18 +382,44 @@ func newTestAgentAuthHandler() *AgentAuthHandler {
 
 	apiKeys, err := agentauth.NewAPIKeyService(context.Background(), agent.ProviderMiniMax, &agentAuthMemoryKeyStore{
 		keys: map[agent.ProviderID]string{},
-	}, nil)
+	}, nil, allowAgentAccountPolicy{})
 	if err != nil {
 		panic(err)
 	}
 
+	savedAccounts := func() *agentAuthMemoryAccounts {
+		return &agentAuthMemoryAccounts{
+			snapshot: agentauth.AccountsSnapshot{Items: []agentauth.Account{
+				{ID: "first", Label: "First", Active: true},
+				{ID: "second", Label: "Second"},
+			}, ActiveAccountID: "first"},
+		}
+	}
+	claudeBinding := agentauth.NewCodeBinding(agent.ProviderClaude, code).WithAccounts(savedAccounts())
+	codexBinding := agentauth.NewDeviceBinding(agent.ProviderCodex, device("codex CLI not found on PATH - install it first")).WithAccounts(savedAccounts())
 	return NewAgentAuthHandler([]agentauth.Binding{
-		agentauth.NewCodeBinding(agent.ProviderClaude, code),
-		agentauth.NewDeviceBinding(agent.ProviderCodex, device("codex CLI not found on PATH - install it first")),
+		claudeBinding,
+		codexBinding,
 		agentauth.NewDeviceBinding(agent.ProviderKimi, device("kimi CLI not found on PATH - install it first")),
 		agentauth.NewAPIKeyBinding(agent.ProviderMiniMax, apiKeys),
 	}, nil)
 }
+
+type agentAuthMemoryAccounts struct{ snapshot agentauth.AccountsSnapshot }
+
+func (s *agentAuthMemoryAccounts) AccountsSnapshot() agentauth.AccountsSnapshot { return s.snapshot }
+func (s *agentAuthMemoryAccounts) ImportCurrent(context.Context, string) error  { return nil }
+func (s *agentAuthMemoryAccounts) StartAccountLogin(context.Context, string, string) (agentauth.LoginSnapshot, error) {
+	return agentauth.LoginSnapshot{}, nil
+}
+func (s *agentAuthMemoryAccounts) ActivateAccount(_ context.Context, id string) error {
+	s.snapshot.ActiveAccountID = id
+	for index := range s.snapshot.Items {
+		s.snapshot.Items[index].Active = s.snapshot.Items[index].ID == id
+	}
+	return nil
+}
+func (s *agentAuthMemoryAccounts) DeleteAccount(context.Context, string) error { return nil }
 
 type agentAuthMemoryKeyStore struct {
 	keys map[agent.ProviderID]string

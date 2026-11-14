@@ -1,8 +1,6 @@
 import { requestJson } from "./apiRequest";
 import { chatEventsApi } from "./chat/chatEventsApi";
-import { chatFilesApi } from "./chat/chatFilesApi";
 import { chatHistoryApi } from "./chat/chatHistoryApi";
-import { chatScheduleApi } from "./chat/chatScheduleApi";
 import {
   fetchFullTranscriptContent,
   fetchTranscript,
@@ -27,12 +25,10 @@ export const chatApi = {
     requestJson<{ ok: boolean }>("DELETE", API_ROUTES.chats.item(id)),
   fork: (id: string) =>
     requestJson<ChatMeta>("POST", API_ROUTES.chats.fork(id), {}),
-  ...chatFilesApi,
   fetchTranscript,
   fetchTranscriptContent,
   fetchFullTranscriptContent,
   rewind: chatEventsApi.rewind,
   ...chatHistoryApi,
-  ...chatScheduleApi,
   openStream: chatEventsApi.openStream,
 };

@@ -20,30 +20,35 @@ type Middleware interface {
 }
 
 type Handlers struct {
-	Sessions          RouteRegistrar
-	Chats             RouteRegistrar
-	Projects          RouteRegistrar
-	Users             RouteRegistrar
-	AgentAuth         RouteRegistrar
-	AgentCapabilities RouteRegistrar
-	UserSettings      RouteRegistrar
-	Security          RouteRegistrar
-	Push              RouteRegistrar
-	ServerInfo        RouteRegistrar
-	SelfUpdate        RouteRegistrar
-	Skills            RouteRegistrar
-	BrowserInspector  RouteRegistrar
-	Schedules         RouteRegistrar
-	Uploads           RouteRegistrar
-	TmuxWS            WebSocketRegistrar
-	TerminalWS        WebSocketRegistrar
-	ChatWS            WebSocketRegistrar
-	WorkspaceWS       WebSocketRegistrar
-	AgentAuthWS       WebSocketRegistrar
-	Auth              RouteRegistrar
-	Middleware        Middleware
-	Static            http.Handler
-	Usage             RouteRegistrar
+	Chats              RouteRegistrar
+	Projects           RouteRegistrar
+	Applications       RouteRegistrar
+	Users              RouteRegistrar
+	AgentAuth          RouteRegistrar
+	AgentCapabilities  RouteRegistrar
+	VoiceTranscription RouteRegistrar
+	UserSettings       RouteRegistrar
+	Security           RouteRegistrar
+	Push               RouteRegistrar
+	EmailSettings      RouteRegistrar
+	ServerInfo         RouteRegistrar
+	SelfUpdate         RouteRegistrar
+	Skills             RouteRegistrar
+	BrowserInspector   RouteRegistrar
+	AgentApplications  RouteRegistrar
+	Uploads            RouteRegistrar
+	ChatWS             WebSocketRegistrar
+	WorkspaceWS        WebSocketRegistrar
+	AgentAuthWS        WebSocketRegistrar
+	HostTerminalWS     WebSocketRegistrar
+	Auth               RouteRegistrar
+	Workspace          Middleware
+	Middleware         Middleware
+	Static             http.Handler
+	Usage              RouteRegistrar
+	AgentQuota         RouteRegistrar
+	Permissions        RouteRegistrar
+	Audit              RouteRegistrar
 }
 
 func NewHandler(handlers Handlers) http.Handler {
@@ -55,30 +60,29 @@ func NewHandler(handlers Handlers) http.Handler {
 		}
 	}
 
-	register(handlers.Sessions)
 	register(handlers.Chats)
 	register(handlers.Projects)
+	register(handlers.Applications)
 	register(handlers.Users)
 	register(handlers.AgentAuth)
 	register(handlers.AgentCapabilities)
+	register(handlers.VoiceTranscription)
 	register(handlers.UserSettings)
 	register(handlers.Security)
 	register(handlers.Push)
+	register(handlers.EmailSettings)
 	register(handlers.ServerInfo)
 	register(handlers.SelfUpdate)
 	register(handlers.Skills)
 	register(handlers.BrowserInspector)
-	register(handlers.Schedules)
+	register(handlers.AgentApplications)
 	register(handlers.Usage)
+	register(handlers.AgentQuota)
+	register(handlers.Permissions)
+	register(handlers.Audit)
 	register(handlers.Uploads)
 
 	upgrader := NewUpgrader()
-	if handlers.TmuxWS != nil {
-		handlers.TmuxWS.RegisterRoutes(mux, upgrader)
-	}
-	if handlers.TerminalWS != nil {
-		handlers.TerminalWS.RegisterRoutes(mux, upgrader)
-	}
 	if handlers.ChatWS != nil {
 		handlers.ChatWS.RegisterRoutes(mux, upgrader)
 	}
@@ -88,6 +92,9 @@ func NewHandler(handlers Handlers) http.Handler {
 	if handlers.AgentAuthWS != nil {
 		handlers.AgentAuthWS.RegisterRoutes(mux, upgrader)
 	}
+	if handlers.HostTerminalWS != nil {
+		handlers.HostTerminalWS.RegisterRoutes(mux, upgrader)
+	}
 	if handlers.Auth != nil {
 		handlers.Auth.RegisterRoutes(mux)
 	}
@@ -96,6 +103,9 @@ func NewHandler(handlers Handlers) http.Handler {
 	}
 
 	var handler http.Handler = mux
+	if handlers.Workspace != nil {
+		handler = handlers.Workspace.Wrap(handler)
+	}
 	if handlers.Middleware != nil {
 		handler = handlers.Middleware.Wrap(handler)
 	}

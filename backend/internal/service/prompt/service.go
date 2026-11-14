@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/futrx-com/remote.futrx.com/internal/agent"
 	agentmodule "github.com/futrx-com/remote.futrx.com/internal/service/agent/module"
+	"github.com/futrx-com/remote.futrx.com/internal/service/audit"
 	servicechat "github.com/futrx-com/remote.futrx.com/internal/service/chat"
 	serviceproject "github.com/futrx-com/remote.futrx.com/internal/service/project"
 	"github.com/futrx-com/remote.futrx.com/internal/service/runhub"
@@ -45,12 +47,14 @@ type Actor struct {
 }
 
 type StartInput struct {
-	ChatID          servicechat.ID
-	Prompt          string
-	Actor           Actor
-	ScheduledTaskID string
-	ScheduledRunID  string
-	ParentContext   context.Context
+	ChatID                servicechat.ID
+	Prompt                string
+	Actor                 Actor
+	ApplicationInstanceID string
+	ApplicationID         string
+	ApplicationRequestID  string
+	ApplicationContext    json.RawMessage
+	ParentContext         context.Context
 }
 
 type RunResult struct {
@@ -59,26 +63,26 @@ type RunResult struct {
 }
 
 type RunHandle struct {
-	ID   uint64
-	Done <-chan RunResult
+	ID     uint64
+	TurnID string
+	Done   <-chan RunResult
 }
 
-type ScheduleToolRequest struct {
-	Actor           Actor
-	ChatID          servicechat.ID
-	ProjectID       serviceproject.ID
-	ScheduledTaskID string
-	ScheduledRunID  string
+type ApplicationToolRequest struct {
+	Actor                 Actor
+	ChatID                servicechat.ID
+	ProjectID             serviceproject.ID
+	ApplicationInstanceID string
+	ApplicationRequestID  string
+	Context               json.RawMessage
 }
-
-type ScheduleToolAccess struct {
-	APIURL string
-	Token  string
+type ApplicationToolAccess struct {
+	Env    map[string]string
+	Skills []servicechat.SkillRef
 	Revoke func()
 }
-
-type ScheduleToolIssuer interface {
-	IssueScheduleTool(context.Context, ScheduleToolRequest) (ScheduleToolAccess, error)
+type ApplicationToolIssuer interface {
+	IssueApplicationTools(context.Context, ApplicationToolRequest) (ApplicationToolAccess, error)
 }
 
 // UsageRecorder receives one entry per completed agent run. It is the only
@@ -86,6 +90,15 @@ type ScheduleToolIssuer interface {
 // aggregation all live in the usage service.
 type UsageRecorder interface {
 	RecordRun(ctx context.Context, event serviceusage.RunEvent)
+}
+
+// QuotaRecorder files the subscription windows the agent CLIs volunteer. A
+// plan belongs to the provider account that ran, so each window arrives with
+// the saved account ID its adapter stamped, or an empty ID for the provider's
+// host login. It is optional: without one the readings are dropped and the
+// dashboard has no plan card, which is the behaviour before this existed.
+type QuotaRecorder interface {
+	Record(ctx context.Context, provider agent.ProviderID, accountID string, quota agent.Quota)
 }
 
 type Option func(*Service)
@@ -103,15 +116,24 @@ func WithStartGate(gate StartGate) Option {
 	}
 }
 
-func WithScheduleToolIssuer(issuer ScheduleToolIssuer) Option {
+func (s *Service) SetApplicationToolIssuer(issuer ApplicationToolIssuer) { s.applicationTools = issuer }
+
+func WithApplicationToolIssuer(issuer ApplicationToolIssuer) Option {
 	return func(service *Service) {
-		service.scheduleTools = issuer
+		service.applicationTools = issuer
 	}
 }
 
 func WithUsageRecorder(recorder UsageRecorder) Option {
 	return func(service *Service) {
 		service.usage = recorder
+	}
+}
+
+// WithQuotaRecorder installs the recipient of provider quota observations.
+func WithQuotaRecorder(recorder QuotaRecorder) Option {
+	return func(service *Service) {
+		service.quota = recorder
 	}
 }
 
@@ -131,16 +153,20 @@ func WithAgentPolicy(policy AgentPolicy) Option {
 }
 
 type Service struct {
-	store         servicechat.Repository
-	tmux          TmuxClient
-	projects      ProjectResolver
-	hub           *runhub.Hub
-	agents        AgentRegistry
-	agentPolicy   AgentPolicy
-	scheduleTools ScheduleToolIssuer
-	usage         UsageRecorder
-	startGate     StartGate
-	interactions  interactionResponseRouter
+	accountAccess    AccountAccess
+	store            servicechat.Repository
+	tmux             TmuxClient
+	projects         ProjectResolver
+	hub              *runhub.Hub
+	agents           AgentRegistry
+	agentPolicy      AgentPolicy
+	applicationTools ApplicationToolIssuer
+	usage            UsageRecorder
+	quota            QuotaRecorder
+	startGate        StartGate
+	interactions     interactionResponseRouter
+	projectRuns      projectAdmissions
+	audit            audit.Recorder
 }
 
 func New(
@@ -161,6 +187,7 @@ func New(
 		hub:          hub,
 		agents:       agents,
 		interactions: newInteractionResponseRouter(),
+		audit:        audit.Nop{},
 	}
 	for _, option := range options {
 		if option != nil {
@@ -188,10 +215,30 @@ func (rnr *Service) Start(input StartInput, emitTransient func(ChatEvent)) (RunH
 	if parentCtx == nil {
 		parentCtx = context.Background()
 	}
+	if rnr.accountAccess != nil {
+		parentCtx = accountActorContext(parentCtx, input)
+		meta, err := rnr.store.Get(parentCtx, input.ChatID)
+		if err == nil {
+			_, err = rnr.accountAccess.Resolve(parentCtx, agent.ProviderID(meta.Provider), meta.AccountID)
+		}
+		if err != nil {
+			emitTransient(ChatEvent{T: time.Now().UnixMilli(), Type: "error", Message: err.Error()})
+			return RunHandle{}, err
+		}
+	}
+	// Account authorization has no side effects, so it runs before admission
+	// reserves the project.
+	release, err := rnr.admitProject(parentCtx, input)
+	if err != nil {
+		emitTransient(ChatEvent{T: time.Now().UnixMilli(), Type: "error", Message: err.Error()})
+		return RunHandle{}, err
+	}
 	ctx, cancel := context.WithCancel(parentCtx)
 	runID, ok := rnr.hub.StartRun(input.ChatID, cancel)
 	if !ok {
+		release()
 		cancel()
+		rnr.recordRun(parentCtx, audit.ActionAgentRunStart, input, ErrPromptAlreadyRunning)
 		emitTransient(ChatEvent{
 			T: time.Now().UnixMilli(), Type: "error",
 			Message: "a previous prompt is still running — cancel first",
@@ -203,6 +250,8 @@ func (rnr *Service) Start(input StartInput, emitTransient func(ChatEvent)) (RunH
 	done := make(chan RunResult, 1)
 	ledgerRunID := newLedgerRunID()
 	go func() {
+		defer cancel()
+		defer release()
 		defer close(done)
 		defer rnr.hub.FinishRun(input.ChatID, runID)
 		defer rnr.interactions.remove(input.ChatID, runID)
@@ -213,9 +262,9 @@ func (rnr *Service) Start(input StartInput, emitTransient func(ChatEvent)) (RunH
 			ledgerRunID,
 			responses,
 			func(ev ChatEvent) {
-				// Stamp the originating task so a scheduled run's events stay
-				// distinguishable from an interactive turn's downstream.
-				ev.ScheduledTaskID = input.ScheduledTaskID
+				// Preserve the application origin without interpreting its workflow.
+				ev.ApplicationID = input.ApplicationID
+				ev.ApplicationRequestID = input.ApplicationRequestID
 				rnr.hub.Emit(input.ChatID, ev)
 				if ev.Type == "assistant_text" {
 					output.WriteString(ev.Text)
@@ -225,11 +274,13 @@ func (rnr *Service) Start(input StartInput, emitTransient func(ChatEvent)) (RunH
 		)
 		done <- RunResult{Output: output.String(), Err: err}
 	}()
-	return RunHandle{ID: runID, Done: done}, nil
+	return RunHandle{ID: runID, TurnID: ledgerRunID, Done: done}, nil
 }
 
-func (rnr *Service) CancelPrompt(id servicechat.ID) bool {
-	return rnr.hub.CancelRun(id)
+func (rnr *Service) CancelPrompt(ctx context.Context, id servicechat.ID) bool {
+	canceled := rnr.hub.CancelRun(id)
+	rnr.recordRunCancellation(ctx, id, canceled)
+	return canceled
 }
 
 func (rnr *Service) RespondInteraction(id servicechat.ID, response agent.InteractionResponse) error {
@@ -260,14 +311,38 @@ func (rnr *Service) runPromptAs(
 	interactionResponses <-chan agent.InteractionResponse,
 	emit func(ChatEvent),
 	emitTransient func(ChatEvent),
-) error {
+) (resultErr error) {
 	emit = withTurnID(ledgerRunID, emit)
+	emitUnattributed := emit
+	emit = func(event ChatEvent) {
+		// The actor comes from the authenticated transport or captured application
+		// owner, never from provider output or the client's prompt payload.
+		event.UserEmail = input.Actor.Email
+		emitUnattributed(event)
+	}
 	id := input.ChatID
 	prompt := input.Prompt
 	meta, err := rnr.store.Get(ctx, id)
 	if err != nil {
 		emitTransient(ChatEvent{T: time.Now().UnixMilli(), Type: "error", Message: err.Error()})
 		return err
+	}
+
+	if rnr.accountAccess != nil {
+		ctx = accountActorContext(ctx, input)
+		selected, err := rnr.accountAccess.Resolve(ctx, agent.ProviderID(meta.Provider), meta.AccountID)
+		if err != nil {
+			emitTransient(ChatEvent{T: time.Now().UnixMilli(), Type: "error", Message: err.Error()})
+			return err
+		}
+		meta.AccountID = selected
+		ctx = audit.WithProject(ctx, string(meta.ProjectID))
+	}
+
+	ctx = audit.WithProject(audit.EnsureCaller(ctx, audit.Caller{Actor: audit.Actor{Email: input.Actor.Email, IsAdmin: input.Actor.IsAdmin}}), string(meta.ProjectID))
+	if rnr.audit != nil {
+		entry := rnr.recordStartedRun(ctx, input, meta, ledgerRunID)
+		defer func() { rnr.recordCompletedRun(ctx, entry, resultErr) }()
 	}
 
 	// Auto-title from first user prompt if still default.
@@ -314,17 +389,34 @@ func (rnr *Service) runPromptAs(
 			return ErrUnsupportedAgentScope
 		}
 	}
-	promptSkills := meta.SelectedSkills
-	if input.ScheduledTaskID != "" && !hasScheduledTasksSkill(promptSkills) {
-		promptSkills = append(
-			append([]servicechat.SkillRef(nil), promptSkills...),
-			servicechat.SkillRef{
-				Name:     "Scheduled Tasks",
-				Command:  scheduledTasksSkillName,
-				Provider: servicechat.Provider(providerID),
-				Source:   "remote",
-			},
-		)
+	promptSkills := append([]servicechat.SkillRef(nil), meta.SelectedSkills...)
+	runtimeEnv := map[string]string(nil)
+	if descriptor.Features.ApplicationTools && rnr.applicationTools != nil {
+		access, err := rnr.applicationTools.IssueApplicationTools(ctx, ApplicationToolRequest{
+			Actor: input.Actor, ChatID: id, ProjectID: serviceproject.ID(meta.ProjectID),
+			ApplicationInstanceID: input.ApplicationInstanceID, ApplicationRequestID: input.ApplicationRequestID,
+			Context: input.ApplicationContext,
+		})
+		if err != nil {
+			return err
+		}
+		if access.Revoke != nil {
+			defer access.Revoke()
+		}
+		runtimeEnv = access.Env
+		for _, skill := range access.Skills {
+			found := false
+			for _, selected := range promptSkills {
+				if skillTriggerName(selected.Command) == skillTriggerName(skill.Command) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				skill.Provider = servicechat.Provider(providerID)
+				promptSkills = append(promptSkills, skill)
+			}
+		}
 	}
 	resumeID := sessionIDForProvider(meta, providerID)
 	if rnr.agentPolicy != nil && !descriptor.Features.Sessions.Resume {
@@ -359,53 +451,31 @@ func (rnr *Service) runPromptAs(
 		return err
 	}
 
-	enableScheduleTools := descriptor.Features.ScheduledTools &&
-		(hasScheduledTasksSkill(meta.SelectedSkills) || input.ScheduledTaskID != "")
-	runtimeEnv := map[string]string(nil)
-	if enableScheduleTools {
-		if meta.ProjectID == "" {
-			err := errors.New("scheduled tasks are only available in project chats")
-			emit(ChatEvent{T: time.Now().UnixMilli(), Type: "error", Message: err.Error()})
-			return err
-		}
-		if rnr.scheduleTools == nil {
-			err := errors.New("scheduled task tools are unavailable")
-			emit(ChatEvent{T: time.Now().UnixMilli(), Type: "error", Message: err.Error()})
-			return err
-		}
-		access, accessErr := rnr.scheduleTools.IssueScheduleTool(ctx, ScheduleToolRequest{
-			Actor:           input.Actor,
-			ChatID:          id,
-			ProjectID:       serviceproject.ID(meta.ProjectID),
-			ScheduledTaskID: input.ScheduledTaskID,
-			ScheduledRunID:  input.ScheduledRunID,
-		})
-		if accessErr != nil {
-			emit(ChatEvent{T: time.Now().UnixMilli(), Type: "error", Message: accessErr.Error()})
-			return accessErr
-		}
-		if access.Revoke != nil {
-			defer access.Revoke()
-		}
-		runtimeEnv = map[string]string{
-			"REMOTE_SCHEDULE_API":   access.APIURL,
-			"REMOTE_SCHEDULE_GRANT": access.Token,
-		}
-	}
-
 	ledger := ledgerRun{
-		runID:     ledgerRunID,
-		chatID:    id,
-		projectID: string(meta.ProjectID),
-		userEmail: input.Actor.Email,
-		provider:  providerID,
-		model:     meta.Model,
-		scheduled: input.ScheduledTaskID != "",
+		runID:                ledgerRunID,
+		chatID:               id,
+		projectID:            string(meta.ProjectID),
+		userEmail:            input.Actor.Email,
+		model:                meta.Model,
+		applicationID:        input.ApplicationID,
+		applicationRequestID: input.ApplicationRequestID,
 	}
 
 	run := func(runPrompt, runResumeID string) error {
-		return provider.Run(ctx, agent.RunRequest{
+		if rnr.accountAccess != nil {
+			if _, err := rnr.accountAccess.Resolve(ctx, providerID, meta.AccountID); err != nil {
+				return err
+			}
+		}
+		rnr.recordAccountUse(ctx, input, meta, providerID, ledgerRunID)
+		relay := runEventRelay{
+			service: rnr, ctx: ctx, chatID: id, providerID: providerID,
+			ledger: ledger, emit: emit,
+		}
+		var completion *agent.Event
+		runErr := provider.Run(ctx, agent.RunRequest{
 			Provider:       providerID,
+			AccountID:      meta.AccountID,
 			ConversationID: string(id),
 			Prompt:         runPrompt,
 			Cwd:            cwd,
@@ -421,15 +491,42 @@ func (rnr *Service) runPromptAs(
 				SandboxPolicy:   servicechat.NormalizeSandboxPolicy(meta.SandboxPolicy),
 			},
 			EnableBrowser:        enableBrowser,
-			EnableScheduleTools:  enableScheduleTools,
 			RuntimeEnv:           runtimeEnv,
 			InteractionResponses: interactionResponses,
-		}, func(ev agent.Event) {
-			// qa added the provider argument; the ledger hook is this
-			// branch's and sits after the emit as before.
-			rnr.emitAgentEvent(ctx, id, providerID, ev, emit)
-			rnr.recordRunUsage(ctx, ledger, ev)
+		}, func(event agent.Event) {
+			if meta.SetupRepair && event.Type == agent.EventRunCompleted {
+				completion = &event
+				return
+			}
+			relay.forward(event)
 		})
+		if runErr == nil && meta.SetupRepair {
+			verifier, ok := rnr.projects.(interface {
+				VerifySetup(context.Context, serviceproject.ID) (serviceproject.Meta, error)
+			})
+			if !ok {
+				runErr = errors.New("project setup verifier unavailable")
+			} else {
+				_, runErr = verifier.VerifySetup(ctx, serviceproject.ID(meta.ProjectID))
+			}
+		}
+		if completion != nil {
+			if runErr != nil {
+				// The provider spent these tokens even when setup still fails.
+				// Keep its completion for accounting, with a failed turn status
+				// and a platform result instead of the agent's success summary.
+				completion.Status = "failed"
+				relay.emit = func(event ChatEvent) {
+					if event.Type == "complete" {
+						event.NotificationSummary = "Automatic setup repair did not pass verification. Open the repair chat for details."
+					}
+					emit(event)
+				}
+			}
+			relay.forward(*completion)
+		}
+		relay.finish()
+		return runErr
 	}
 
 	err = run(effectivePrompt, resumeID)
@@ -514,23 +611,12 @@ func promptWithVisibleHistory(events []ChatEvent, prompt string) string {
 }
 
 const browserSkillName = "browser"
-const scheduledTasksSkillName = "scheduled-tasks"
 
 // hasBrowserSkill reports whether the user selected the `browser` skill. The
 // module descriptor must also enable browser tools before they are wired in.
 func hasBrowserSkill(skills []servicechat.SkillRef) bool {
 	for _, s := range skills {
 		if skillTriggerName(s.Command) == browserSkillName || skillTriggerName(s.Name) == browserSkillName {
-			return true
-		}
-	}
-	return false
-}
-
-func hasScheduledTasksSkill(skills []servicechat.SkillRef) bool {
-	for _, skill := range skills {
-		if skillTriggerName(skill.Command) == scheduledTasksSkillName ||
-			skillTriggerName(skill.Name) == scheduledTasksSkillName {
 			return true
 		}
 	}

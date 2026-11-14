@@ -24,11 +24,23 @@ type recordingRuntime struct {
 	attachErr error
 	deleteErr error
 	mountMiss int
+	free      uint64
+	spaceErr  error
+	imageSize uint64
+	imageErr  error
 }
 
 func (r *recordingRuntime) Available() bool {
 	*r.events = append(*r.events, "runtime available")
 	return r.available
+}
+func (r *recordingRuntime) StorageSpace(context.Context) (string, uint64, uint64, error) {
+	*r.events = append(*r.events, "runtime storage space")
+	return "default", r.free, r.free * 2, r.spaceErr
+}
+func (r *recordingRuntime) ImageSize(_ context.Context, alias string) (uint64, error) {
+	*r.events = append(*r.events, "runtime image size "+alias)
+	return r.imageSize, r.imageErr
 }
 func (r *recordingRuntime) Init(_ context.Context, image, container string) error {
 	*r.events = append(*r.events, "runtime init "+image+" "+container)
@@ -133,8 +145,8 @@ func (r recordingResources) SetLimits(_ context.Context, container, cpu, memory,
 
 type recordingProvisioner struct{ events *[]string }
 
-func (p recordingProvisioner) Provision(_ context.Context, container, name string) {
-	*p.events = append(*p.events, "provision "+container+" "+name)
+func (p recordingProvisioner) Provision(_ context.Context, container, name, slug string) {
+	*p.events = append(*p.events, "provision "+container+" "+name+" "+slug)
 }
 
 type testProfileSource struct{}
@@ -152,6 +164,7 @@ func testProject(t *testing.T) serviceproject.Meta {
 	t.Helper()
 	return serviceproject.Meta{
 		Name:          "My Project",
+		Slug:          "my-project",
 		Cwd:           filepath.Join(t.TempDir(), "project", "workspace"),
 		ContainerName: "project-1",
 	}
@@ -197,7 +210,7 @@ func TestEnsureCreatesStoppedContainerThenAttachesAndValidatesAllDurableMounts(t
 	if initAt < 0 || attachAt < initAt || startAt < attachAt {
 		t.Fatalf("container was not initialized, mounted, then started: %q", events)
 	}
-	if !slices.Contains(events, "provision project-1 My Project") {
+	if !slices.Contains(events, "provision project-1 My Project my-project") {
 		t.Fatalf("launch provisioning missing: %q", events)
 	}
 }
@@ -253,6 +266,9 @@ func TestEnsureRunningHealthyContainerDoesNotRestart(t *testing.T) {
 	}
 	if slices.Contains(events, "runtime stop project-1") || slices.Contains(events, "runtime start project-1") {
 		t.Fatalf("healthy container restarted: %q", events)
+	}
+	if !slices.Contains(events, "provision project-1 My Project my-project") {
+		t.Fatalf("healthy existing container was not reconciled: %q", events)
 	}
 }
 

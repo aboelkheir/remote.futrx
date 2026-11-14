@@ -5,6 +5,11 @@ import (
 	"strings"
 )
 
+// ContainerAgentProcessMarker is attached to every provider invocation that
+// runs through lxc. Host-side lifecycle checks use the marker to distinguish a
+// real agent run from ordinary maintenance commands such as git inspection.
+const ContainerAgentProcessMarker = "REMOTE_FUTRX_AGENT_PROCESS=1"
+
 // RuntimeEnvironment returns deterministic KEY=value entries for
 // backend-issued, per-run capabilities. Invalid environment names are ignored.
 func RuntimeEnvironment(values map[string]string) []string {

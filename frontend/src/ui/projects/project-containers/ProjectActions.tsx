@@ -1,3 +1,4 @@
+import { useEffectivePermissions } from "../../../state/hooks/permissions/useEffectivePermissions";
 import { useState } from "preact/hooks";
 import { useConfirm } from "../../../state/context/ConfirmContext";
 import type { ProjectMeta } from "../../../models/project";
@@ -21,9 +22,13 @@ export function ProjectActions({
   const [err, setErr] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const confirm = useConfirm();
-  const canStart = project.status === "stopped" || project.status === "missing" || project.status === "error";
-  const canStop = project.status === "running";
-  const canRestart = project.status === "running" || project.status === "error";
+  const permissions = useEffectivePermissions(project.id);
+  const lifecycleAllowed = permissions["projects.lifecycle.manage"] === true;
+  const controlsAllowed = permissions["projects.controls.manage"] === true;
+  const repairing = project.setupRepair?.state === "running";
+  const canStart = !repairing && (project.status === "stopped" || project.status === "missing" || project.status === "error");
+  const canStop = project.status === "running" || (project.status === "error" && project.setupFailed);
+  const canRestart = !repairing && (project.status === "running" || project.status === "error");
 
   async function run(action: "start" | "stop" | "restart", operation: () => Promise<void>) {
     if (action === "restart") {
@@ -54,6 +59,23 @@ export function ProjectActions({
         onClose={() => setDeleteOpen(false)}
         onDelete={onDelete}
       />
+      {(project.setupFailed || project.setupRepair) && (
+        <div class="rounded-lg border border-accent-yellow/30 bg-accent-yellow/[0.08] px-3 py-2.5 text-[13px]" role="status">
+          {project.setupRepair?.state === "running"
+            ? "An agent is automatically repairing this project's setup."
+            : project.setupRepair?.message || "Automatic setup repair is waiting for the update and active chats to finish."}
+          {project.setupRepair?.chatId && (
+            <a class="mt-1 block text-accent-blue underline" href={`/chats/${encodeURIComponent(project.setupRepair.chatId)}`}>
+              Open repair chat
+            </a>
+          )}
+        </div>
+      )}
+      {project.errorMsg && (
+        <div class="max-h-48 overflow-auto rounded-lg border border-accent-red/30 bg-accent-red/[0.08] px-3 py-2.5 text-[13px] text-accent-red whitespace-pre-wrap break-words">
+          {project.errorMsg}
+        </div>
+      )}
       {err && (
         <div class="flex items-start gap-2.5 rounded-lg border border-accent-red/30 bg-accent-red/[0.08] px-3 py-2.5 text-[13px]">
           <AlertCircle class="w-4 h-4 mt-0.5 flex-none text-accent-red" />
@@ -64,7 +86,7 @@ export function ProjectActions({
         <button
           type="button"
           onClick={() => void run("start", onStart)}
-          disabled={!canStart || busy !== null}
+          disabled={!lifecycleAllowed || !canStart || busy !== null}
           class="h-10 rounded-md border border-line bg-tint px-3 text-[13px] font-medium text-ink-100 hover:bg-tint-strong disabled:opacity-45 disabled:cursor-not-allowed"
         >
           {busy === "start" ? "Starting..." : "Start project"}
@@ -72,7 +94,7 @@ export function ProjectActions({
         <button
           type="button"
           onClick={() => void run("stop", onStop)}
-          disabled={!canStop || busy !== null}
+          disabled={!lifecycleAllowed || !canStop || busy !== null}
           class="h-10 rounded-md border border-line bg-tint px-3 text-[13px] font-medium text-ink-100 hover:bg-tint-strong disabled:opacity-45 disabled:cursor-not-allowed"
         >
           {busy === "stop" ? "Stopping..." : "Stop project"}
@@ -81,7 +103,7 @@ export function ProjectActions({
       <button
         type="button"
         onClick={() => void run("restart", onRestart)}
-        disabled={!canRestart || busy !== null}
+        disabled={!lifecycleAllowed || !canRestart || busy !== null}
         title="Host-side kill + fresh boot. Works even when the workspace is unresponsive at its resource limits."
         class="h-10 w-full rounded-md border border-line bg-tint px-3 text-[13px] font-medium text-ink-100 hover:bg-tint-strong disabled:opacity-45 disabled:cursor-not-allowed"
       >
@@ -90,7 +112,7 @@ export function ProjectActions({
       <button
         type="button"
         onClick={() => setDeleteOpen(true)}
-        disabled={busy !== null}
+        disabled={!controlsAllowed || busy !== null}
         class="h-10 w-full rounded-md border border-accent-red/30 bg-accent-red/[0.08] px-3 text-[13px] font-semibold text-accent-red hover:bg-accent-red/[0.14] disabled:opacity-45 disabled:cursor-not-allowed"
       >
         Delete project

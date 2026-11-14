@@ -3,9 +3,11 @@ export const API_RESPONSE_STATUS = {
   unauthorized: 401,
   notFound: 404,
   conflict: 409,
+  serviceUnavailable: 503,
 } as const;
 
 export const DEFAULT_CHAT_HISTORY_COMMIT_LIMIT = 100;
+export const DEFAULT_AUDIT_LOG_LIMIT = 50;
 /** Complete conversation turns fetched on the first chat load. */
 export const CHAT_INITIAL_TRANSCRIPT_TURN_LIMIT = 10;
 /** Complete conversation turns fetched on each older-history page. */
@@ -19,5 +21,3 @@ export const CHAT_STREAM_MESSAGE_TYPES = {
 } as const;
 /** Usage records fetched per drill-down page. */
 export const USAGE_RECORD_PAGE_LIMIT = 100;
-/** How long typing settles before the workspace file search is sent. */
-export const WORKSPACE_FILE_SEARCH_DEBOUNCE_MS = 250;
