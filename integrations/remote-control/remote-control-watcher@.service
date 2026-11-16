@@ -1,0 +1,13 @@
+[Unit]
+Description=Remote Telegram job watcher for %i
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/docker exec -i %i /opt/remote-control/remote-mcp watch
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

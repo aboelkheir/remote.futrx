@@ -40,6 +40,10 @@ func (m *Auth) RequireProviderLogin(authenticated func() bool, allowedPrefixes .
 func (m *Auth) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		if httptransport.HasControlBearer(r) && !httptransport.ControlRouteAllowed(r.Method, path) {
+			http.Error(w, "control credential not allowed on this route", http.StatusForbidden)
+			return
+		}
 		if !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/ws") {
 			// Sign-in, sign-out, and the OAuth round-trip are auditable but
 			// ungated. They get the network half of the caller here; their own
