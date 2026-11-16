@@ -58,7 +58,12 @@ network and metadata denials. This port is not exposed to the public internet.
 OpenClaw `openclaw.json`:
 
 ```json
-"mcp": {"servers": {"remote": {"command": "/opt/remote-control/remote-mcp", "enabled": true}}}
+"mcp": {"servers": {"remote": {
+  "command": "/opt/remote-control/remote-mcp", "enabled": true,
+  "env": {"REMOTE_CONTROL_URL": "<private bridge URL>", "REMOTE_CONTROL_TOKEN": "<OpenClaw token>",
+          "REMOTE_CONTROL_JOBS_DIR": "/opt/remote-control/jobs", "REMOTE_TELEGRAM_BOT_TOKEN": "<OpenClaw bot token>",
+          "REMOTE_TELEGRAM_CHAT_ID": "<owner Telegram ID>"}
+}}}
 ```
 
 Hermes `config.yaml`:
@@ -69,9 +74,16 @@ mcp_servers:
     command: /opt/remote-control/remote-mcp
     enabled: true
     timeout: 120
+    env:
+      REMOTE_CONTROL_URL: <private bridge URL>
+      REMOTE_CONTROL_TOKEN: <Hermes token>
+      REMOTE_CONTROL_JOBS_DIR: /opt/remote-control/jobs
+      REMOTE_TELEGRAM_BOT_TOKEN: <Hermes bot token>
+      REMOTE_TELEGRAM_CHAT_ID: <owner Telegram ID>
 ```
 
-The tool inherits the private environment from its agent container. Existing
+Both MCP runtimes launch child processes with a filtered environment, so the
+same values must appear in each MCP server's private `env` mapping. Existing
 Telegram owner allowlists must remain enabled. `remote_start_task` accepts an
 existing `chatId`, or a `projectId` to create a chat. It returns a job and chat
 ID immediately. The watcher sends tool progress (at most once per 90 seconds),
